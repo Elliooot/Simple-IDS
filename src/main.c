@@ -14,18 +14,50 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
     // Skip Ethernet header (14 bytes)
     struct ip *ip_header = (struct ip *)(packet + 14);
 
-    // Print source IP
-    printf("Packet from %s ", inet_ntoa(ip_header->ip_src));
-    printf("to: %s ", inet_ntoa(ip_header->ip_dst));
-    printf("(Length: %d bytes)\n", header->len);
+    // Check the protocol field in the IP header to see if it is TCP
+    if(ip_header->ip_p != IPPROTO_TCP) return;
 
-    // If TCP, print out the port
-    if(ip_header->ip_p == IPPROTO_TCP){
-        int ip_header_len = ip_header->ip_hl * 4;
-        struct tcphdr *tcp = (struct tcphdr *)(packet + 14 + ip_header_len);
-        printf("   └─ TCP: %d -> %d\n",
-                ntohs(tcp->th_sport), ntohs(tcp->th_dport));
+    int ip_header_len = ip_header->ip_hl * 4;
+    struct tcphdr *tcp = (struct tcphdr *)(packet + 14 + ip_header_len);
+    
+    // Detect HTTP (port 80) only
+    if(ntohs(tcp->th_dport) != 80) return;
+
+    // Get payload
+    int tcp_len = tcp->th_off * 4;
+    const char *payload = (char *)(packet + 14 + ip_header_len + tcp_len);
+    int payload_len = header->len - (14 + ip_header_len + tcp_len);
+
+    if(payload_len <= 0) return;
+
+    // --- Detect Attack ---
+
+    // Check if HTTP request
+    if(strncmp(payload, "GET ", 4) != 0 && strncmp(payload, "POST ", 5) != 0) return;
+
+    printf("HTTP Request from: %s\n", inet_ntoa(ip_header->ip_src));
+
+    // SQL Injection
+    if(strstr(payload, "' OR 1=1") || strstr(payload, "UNION SELECT")){
+        printf("    [ALERT] SQL Injection detected!\n");
     }
+
+    // XSS
+    if(strstr(payload, "<script>") || strstr(payload, "javascript:")){
+        printf("    [ALERT] XSS attempt detected!\n");
+    }
+
+    // Path traversal
+    if(strstr(payload, "../")){
+        printf("    [ALERT] Path traversal detected!\n");
+    }
+
+    // Scanner
+    if(strstr(payload, "sqlmap") || strstr(payload, "nikto")){
+        printf("    [ALERT] Attack tool detected!\n");
+    }
+
+    printf("    Request: %.200s\n\n", payload);
 }
 
 int main(int argc, char *argv[]){
@@ -34,7 +66,7 @@ int main(int argc, char *argv[]){
     char errbuf[PCAP_ERRBUF_SIZE];  // Error String
     struct bpf_program fp;          // The compiled filter
     char filter_exp[] = "tcp";     // The filter expression
-    bpf_u_int32 mask;               // The netmask
+    bpf_u_int32 mask;               // Subnet mask
     bpf_u_int32 net;                // The IP
     struct pcap_pkthdr header;      // The header that pcap gives us
     const u_char *packet;    // The actual packet
