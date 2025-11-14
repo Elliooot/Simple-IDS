@@ -116,3 +116,40 @@ int load_rules(const char *filename){
     printf("Loaded %d rules from %s\n", rule_count, filename);
     return rule_count;
 }
+
+int match_packet(const char *payload, int payload_len, const char *protocol, int dst_port){
+    int matches = 0;
+
+    for(int i = 0; i < rule_count; i++){
+        detection_rule_t *r = &rules[i];
+
+        if(!r->enabled) continue;
+
+        if(strcmp(r->protocol, "ip") != 0 && strcmp(r->protocol, protocol)) continue;
+
+        if(r->dst_port != 0 && r->dst_port != dst_port) continue;
+
+        int found = 0;
+        if(r->nocase){
+            found = (strcasestr_custom(payload, r->content) != NULL);
+        } else {
+            found = (strstr(payload, r->content) != NULL);
+        }
+
+        if(found){
+            printf("[ALERT] %s (SID: %d, Priority: %d)\n",
+                    r->msg, r->sid, r->priority);
+            matches++;
+        }
+    }
+    
+    return matches;   
+}
+
+void free_rules(){
+    rule_count = 0;
+}
+
+int get_rule_count(){
+    return rule_count;
+}
