@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "rules.h"
+#include "../include/rules.h"
 
 static detection_rule_t rules[MAX_RULES];
 static int rule_count = 0;
@@ -30,7 +30,7 @@ static char *strcasestr_custom(const char *haystack, const char *needle){
 int load_rules(const char *filename){
     FILE *fp = fopen(filename, "r");
     if(!fp){
-        fprint(stderr, "Cannot open rules file:%s\n", filename);
+        fprintf(stderr, "Cannot open rules file:%s\n", filename);
         return -1;
     }
 
@@ -125,7 +125,7 @@ int match_packet(const char *payload, int payload_len, const char *protocol, int
 
         if(!r->enabled) continue;
 
-        if(strcmp(r->protocol, "ip") != 0 && strcmp(r->protocol, protocol)) continue;
+        if(strcmp(r->protocol, "ip") != 0 && strcmp(r->protocol, protocol) != 0) continue;
 
         if(r->dst_port != 0 && r->dst_port != dst_port) continue;
 

@@ -7,8 +7,12 @@
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
+#include "../include/rules.h"
 
-typedef unsigned char u_char;
+// typedef unsigned char u_char;
+
+// static pcap_t *global_handle = NULL;
+// static pcap_if_t *global_alldevs = NULL;
 
 void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char *packet){
     // Skip Ethernet header (14 bytes)
@@ -19,9 +23,12 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
 
     int ip_header_len = ip_header->ip_hl * 4;
     struct tcphdr *tcp = (struct tcphdr *)(packet + 14 + ip_header_len);
+
+    // Get current port
+    int dst_port = ntohs(tcp->th_dport);
     
     // Detect HTTP (port 80) only
-    if(ntohs(tcp->th_dport) != 80) return;
+    if(dst_port != 80) return;
 
     // Get payload
     int tcp_len = tcp->th_off * 4;
@@ -30,31 +37,22 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
 
     if(payload_len <= 0) return;
 
+    // Check if it's HTTP request
+    if(strncmp(payload, "GET ", 4) != 0 &&
+        strncmp(payload, "POST ", 5) != 0 &&
+        strncmp(payload, "PUT ", 4) != 0 &&
+        strncmp(payload, "DELETE ", 7) != 0){
+            return;
+        }
+
     // --- Detect Attack ---
+    printf("HTTP Request from: %s:%d\n", 
+           inet_ntoa(ip_header->ip_src), ntohs(tcp->th_sport));
 
-    // Check if HTTP request
-    if(strncmp(payload, "GET ", 4) != 0 && strncmp(payload, "POST ", 5) != 0) return;
+    int matches = match_packet(payload, payload_len, "tcp", dst_port);
 
-    printf("HTTP Request from: %s\n", inet_ntoa(ip_header->ip_src));
-
-    // SQL Injection
-    if(strstr(payload, "' OR 1=1") || strstr(payload, "UNION SELECT")){
-        printf("    [ALERT] SQL Injection detected!\n");
-    }
-
-    // XSS
-    if(strstr(payload, "<script>") || strstr(payload, "javascript:")){
-        printf("    [ALERT] XSS attempt detected!\n");
-    }
-
-    // Path traversal
-    if(strstr(payload, "../")){
-        printf("    [ALERT] Path traversal detected!\n");
-    }
-
-    // Scanner
-    if(strstr(payload, "sqlmap") || strstr(payload, "nikto")){
-        printf("    [ALERT] Attack tool detected!\n");
+    if(matches == 0){
+        printf("    Clean request\n");
     }
 
     printf("    Request: %.200s\n\n", payload);
@@ -65,11 +63,9 @@ int main(int argc, char *argv[]){
     char *dev;                      // Device to sniff on
     char errbuf[PCAP_ERRBUF_SIZE];  // Error String
     struct bpf_program fp;          // The compiled filter
-    char filter_exp[] = "tcp";     // The filter expression
+    char filter_exp[] = "tcp port 80";     // The filter expression
     bpf_u_int32 mask;               // Subnet mask
     bpf_u_int32 net;                // The IP
-    struct pcap_pkthdr header;      // The header that pcap gives us
-    const u_char *packet;    // The actual packet
 
     // List all available devices first
     pcap_if_t *alldevs;
@@ -130,12 +126,19 @@ int main(int argc, char *argv[]){
         return 2;
     }
 
-    printf("Capturing TCP packets...\n");
-    printf("Tip: Open a browser to generate traffic\n\n");
-    
+    if(load_rules("../rules/http-attacks.rules") < 0){
+        return 1;
+    }
+
+    printf("Monitoring with %d rules...\n\n", get_rule_count());
+    printf("💡 Tip: In another terminal, run:\n");
+    printf("   curl \"http://httpbin.org/get?test=<script>alert(1)</script>\"\n");
+    printf("   curl \"http://httpbin.org/get?id=' OR 1=1--\"\n\n");    
     
     pcap_loop(handle, 0, packet_handler, NULL);
     
+    // Cleanup
+    free_rules();
     pcap_close(handle);
     pcap_freealldevs(alldevs);
 

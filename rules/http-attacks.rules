@@ -1,0 +1,32 @@
+# XSS Attack
+alert tcp any any -> any 80 (content:"<script>"; msg:"XSS: Script tag detected"; sid:1001; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"javascript"; msg:"XSS: JavaScript protocol"; sid:1002; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"onerror="; msg:"XSS: Event handler"; sid:1003; nocase; priority:3;)
+
+# SQL Injection
+alert tcp any any -> any 80 (content:"' OR 1=1"; msg:"SQL Injection: Classic OR bypass"; sid:2001; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"UNION SELECT"; msg:"SQL Injection: UNION attack"; sid:2002; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"DROP TABLE"; msg:"SQL Injection: DROP TABLE command"; sid:2003; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"exec("; msg:"SQL Injection: Code execution"; sid:2004; nocase; priority:1;)
+
+# Command Injection
+alert tcp any any -> any 80 (content:"cmd.exe"; msg:"Command Injection: Windows CMD"; sid:3001; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"/bin/sh"; msg:"Command Injection: Unix Shell"; sid:3002; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"$("; msg:"Command Injection: Shell variable"; sid:3003; nocase; priority:2;)
+alert tcp any any -> any 80 (content:"; rm -rf"; msg:"Command Injection: Dangerous command"; sid:3004; nocase; priority:1;)
+
+# Path Traversal
+alert tcp any any -> any 80 (content:"../"; msg:"Path Traversal: Directory climbing"; sid:4001; priority:2;)
+alert tcp any any -> any 80 (content:"..\\"; msg:"Path Traversal: Windows style"; sid:4002; priority:2;)
+alert tcp any any -> any 80 (content:"/etc/passwd"; msg:"Path Traversal: Unix passwd file access"; sid:4003; priority:1;)
+alert tcp any any -> any 80 (content:"C:\\Windows\\System32"; msg:"Path Traversal: Windows System32 access"; sid:4004; priority:1;)
+
+# Scanner/Tool Detection
+alert tcp any any -> any 80 (content:"sqlmap"; msg:"Attack Tool: SQLMap detected"; sid:5001; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"nikto"; msg:"Attack Tool: Nikto scanner"; sid:5002; nocase; priority:1;)
+alert tcp any any -> any 80 (content:"nmap"; msg:"Attack Tool: Nmap scanner"; sid:5003; nocase; priority:2;)
+alert tcp any any -> any 80 (content:"acunetix"; msg:"Attack Tool: Acunetix scanner"; sid:5004; nocase; priority:1;)
+
+# File Upload Attacks
+alert tcp any any -> any 80 (content:"Content-Type: application/x-php"; msg:"Suspicious File Upload: PHP file"; sid:6001; nocase; priority:2;)
+alert tcp any any -> any 80 (content:".php"; msg:"PHP file in request"; sid:6002; nocase; priority:3;)
