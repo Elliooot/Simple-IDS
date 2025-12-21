@@ -51,20 +51,25 @@ int load_rules(const char *filename){
         r->priority = 2; // default priority level
 
         // Parsing format: alert tcp any any -> any 80 (content:"<script>"; msg:"XSS"; sid:1001; nocase;)
-        char action[16], src[32], dst[32];
-        int src_port, dst_port;
+        char action[16], src[32], dst[32], src_port_str[16], dst_port_str[16];
+        // int src_port, dst_port;
         char options[256];
 
-        int parsed = sscanf(line, "%s %s %s %d -> %s %d (%[^)])",
-                            action, r->protocol, src, &src_port,
-                            dst, &dst_port, options);
+        int parsed = sscanf(line, "%s %s %s %s -> %s %s (%[^)])",
+                            action, r->protocol, src, src_port_str,
+                            dst, dst_port_str, options);
         
         if(parsed < 7){
-            fprintf(stderr, "Line %d: Parse error, skipping...\n", line_num);
+            fprintf(stderr, "Line %d: Parse error (parsed=%d), skipping: %s\n", 
+                    line_num, parsed, line);
             continue;
         }
 
-        r->dst_port = (dst_port == 0) ? 0 : dst_port;
+        if(strcmp(dst_port_str, "any") == 0){
+            r->dst_port = 0;
+        } else {
+            r->dst_port = atoi(dst_port_str);
+        }
 
         // Parse options
         char *content_start = strstr(options, "content:\""); // Find String 'content:"'
@@ -93,7 +98,7 @@ int load_rules(const char *filename){
             }
         }
 
-        char *sid_start = strstr(options, "sid:\"");
+        char *sid_start = strstr(options, "sid:");
         if(sid_start){
             sscanf(sid_start, "sid:%d", &r->sid);
         }
@@ -123,11 +128,17 @@ int match_packet(const char *payload, int payload_len, const char *protocol, int
     for(int i = 0; i < rule_count; i++){
         detection_rule_t *r = &rules[i];
 
-        if(!r->enabled) continue;
+        if(!r->enabled) {
+            continue;
+        }
 
-        if(strcmp(r->protocol, "ip") != 0 && strcmp(r->protocol, protocol) != 0) continue;
+        if(strcmp(r->protocol, "ip") != 0 && strcmp(r->protocol, protocol) != 0) {
+            continue;
+        }
 
-        if(r->dst_port != 0 && r->dst_port != dst_port) continue;
+        if(r->dst_port != 0 && r->dst_port != dst_port) {
+            continue;
+        }
 
         int found = 0;
         if(r->nocase){

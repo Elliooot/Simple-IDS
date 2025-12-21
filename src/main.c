@@ -43,7 +43,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
         strncmp(payload, "PUT ", 4) != 0 &&
         strncmp(payload, "DELETE ", 7) != 0){
             return;
-        }
+    }
 
     // --- Detect Attack ---
     printf("HTTP Request from: %s:%d\n", 
@@ -53,6 +53,8 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
 
     if(matches == 0){
         printf("    Clean request\n");
+    }else{
+        printf("    %d rule(s) matched\n", matches);
     }
 
     printf("    Request: %.200s\n\n", payload);
