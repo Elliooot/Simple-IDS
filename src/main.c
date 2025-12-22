@@ -28,7 +28,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
     int dst_port = ntohs(tcp->th_dport);
     
     // Detect HTTP (port 80) only
-    if(dst_port != 80) return;
+    if(dst_port != 80 && dst_port != 443) return;
 
     // Get payload
     int tcp_len = tcp->th_off * 4;
@@ -37,27 +37,69 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
 
     if(payload_len <= 0) return;
 
-    // Check if it's HTTP request
-    if(strncmp(payload, "GET ", 4) != 0 &&
-        strncmp(payload, "POST ", 5) != 0 &&
-        strncmp(payload, "PUT ", 4) != 0 &&
-        strncmp(payload, "DELETE ", 7) != 0){
-            return;
+    // HTTP
+    if(dst_port == 80){
+        // Check if it's HTTP request
+        if(strncmp(payload, "GET ", 4) != 0 &&
+            strncmp(payload, "POST ", 5) != 0 &&
+            strncmp(payload, "PUT ", 4) != 0 &&
+            strncmp(payload, "DELETE ", 7) != 0){
+                return;
+        }
+
+        // --- Detect Attack ---
+        printf("HTTP Request from: %s:%d\n", 
+            inet_ntoa(ip_header->ip_src), ntohs(tcp->th_sport));
+
+        int matches = match_packet(payload, payload_len, "tcp", dst_port);
+
+        if(matches == 0){
+            printf("    Clean request\n");
+        }else{
+            printf("    %d rule(s) matched\n", matches);
+        }
+
+        printf("    Request: %.200s\n\n", payload);
     }
 
-    // --- Detect Attack ---
-    printf("HTTP Request from: %s:%d\n", 
-           inet_ntoa(ip_header->ip_src), ntohs(tcp->th_sport));
+    // HTTPS TLS ClientHello Check
+    if(dst_port == 443){
+        // TLS Handshake prefixes: 0x16 (Handshake) 0x03 (SSL version)
+        if(payload_len > 5 &&
+            (unsigned char)payload[0] == 0x16 &&
+            (unsigned char)payload[1] == 0x03){
+                // Extract SNI
+                const char *sni = extract_sni(payload, payload_len);
+                if(sni){
+                    printf("SNI connection to: %s\n", sni);
 
-    int matches = match_packet(payload, payload_len, "tcp", dst_port);
-
-    if(matches == 0){
-        printf("    Clean request\n");
-    }else{
-        printf("    %d rule(s) matched\n", matches);
+                    if(strstr(sni, "malicious.com") ||
+                        strstr(sni, "phishing.net")){
+                        printf("🚨 [ALERT] Malicious domain detected: %s\n", sni);
+                    }
+                }
+            }
     }
+}
 
-    printf("    Request: %.200s\n\n", payload);
+// Simplified SNI extraction
+const char* extract_sni(const char *payload, int len){
+    static char sni[256];
+
+    // Looking for SNI extension (0x00 0x00 = server_name type)
+    for (int i = 0; i < len - 10; i++){
+        if((unsigned char)payload[i] == 0x00 &&
+            (unsigned char)payload[i+1] == 0x00){
+            // Skip extension type and length
+            int name_len = (unsigned char)payload[i+7];
+            if(name_len > 0 && name_len < 255 && i + 8 + name_len < len){
+                strncpy(sni, payload + i + 9, name_len);
+                sni[name_len] = '\0';
+                return sni;
+            }
+        }
+    }
+    return NULL;
 }
 
 int main(int argc, char *argv[]){

@@ -1,0 +1,3 @@
+# SNI-based HTTPS Attack Detection Rules
+alert tcp any any -> any 443 (content:"malicious.com"; msg:"Malicious domain in SNI"; sid:7001; nocase; priority:1;)
+alert tcp any any -> any 443 (content:"phishing.net"; msg:"Phishing domain in SNI"; sid:7002; nocase; priority:1;)
