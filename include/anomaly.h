@@ -1,4 +1,4 @@
-#ifdef ANOMALY_H
+#ifndef ANOMALY_H
 #define ANOMALY_H
 
 // Automatically detect all anomalies on a single call

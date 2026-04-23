@@ -1,5 +1,5 @@
 CC		= gcc
-CFLAGS	= -Wall -02 -I./include
+CFLAGS	= -Wall -O2 -I./include
 LFLAGS	= -lpcap
 SRC		= src/main.c src/rules.c src/logger.c src/anomaly.c
 TARGET	= SimpleIDS

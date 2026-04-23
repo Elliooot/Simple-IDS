@@ -143,7 +143,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
                 payload);
             printf("    Request: %.200s\n\n", payload);
         } else {
-            printf("    Clean request\n\n");
+            printf("==> Clean request\n\n");
         }
 
         
@@ -167,6 +167,13 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
             // Compare https rules
             int matches = match_packet(sni, strlen(sni), "tcp", dst_port);
             if (matches > 0) {
+                logger_write(LOG_LEVEL_ALERT,
+                             inet_ntoa(ip_header->ip_src),
+                             ntohs(tcp->th_sport),
+                             dst_port,
+                             0,
+                             "Malicious HTTPS domain",
+                             sni);
                 printf("    %d rule(s) matched\n\n", matches);
             }
         }
@@ -239,8 +246,8 @@ int main(int argc, char *argv[]){
         return 2;
     }
 
-    if(load_rules("../rules/http-attacks.rules") < 0) return 1;
-    if(load_rules("../rules/https-attacks.rules") < 0) return 1;
+    if(load_rules("rules/http-attacks.rules") < 0) return 1;
+    if(load_rules("rules/https-attacks.rules") < 0) return 1;
 
     logger_init("../logs/ids.log"); // NULL = not writing file
 
