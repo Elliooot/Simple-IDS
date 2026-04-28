@@ -9,7 +9,7 @@ import sys
 import time
 
 HOST = "localhost"
-PORT = 8080
+PORT = 80
 
 # ANSI Color
 RED    = "\033[91m"
@@ -32,7 +32,6 @@ def send_raw_http(path, host=HOST, port=PORT, method="GET",
             f"User-Agent: {user_agent}\r\n"
             f"Connection: close\r\n"
             f"{extra_headers}"
-            f"\r\n"
         )
 
         s.sendall(request.encode("utf-8", errors="ignore"))

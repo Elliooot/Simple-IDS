@@ -11,10 +11,10 @@
 #include "../include/logger.h"
 #include "../include/anomaly.h"
 
-// typedef unsigned char u_char;
-
-// static pcap_t *global_handle = NULL;
-// static pcap_if_t *global_alldevs = NULL;
+// ===== 全域：link layer header 長度 =====
+// eth0 = 14 bytes (Ethernet)
+// lo   =  4 bytes (Loopback/NULL)
+static int g_link_header_len = 14;
 
 // Simplified SNI extraction
 const char* extract_sni(const char *payload, int len){
@@ -90,7 +90,7 @@ const char* extract_sni(const char *payload, int len){
 
 void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char *packet){
     // Skip Ethernet header (14 bytes)
-    struct ip *ip_header = (struct ip *)(packet + 14);
+    struct ip *ip_header = (struct ip *)(packet + g_link_header_len);
 
     // Check the protocol field in the IP header to see if it is TCP
     if(ip_header->ip_p != IPPROTO_TCP) return;
@@ -102,7 +102,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
     int dst_port = ntohs(tcp->th_dport);
     
     // Detect HTTP (port 80) only
-    if(dst_port != 80 && dst_port != 443) return;
+    if(dst_port != 80 && dst_port != 443 && dst_port != 8080) return;
 
     // Get payload
     int tcp_len = tcp->th_off * 4;
@@ -112,7 +112,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
     if(payload_len <= 0) return;
 
     // HTTP
-    if(dst_port == 80){
+    if(dst_port == 80 || dst_port == 8080){
         // Check if it's HTTP request
         if(strncmp(payload, "GET ", 4) != 0 &&
             strncmp(payload, "POST ", 5) != 0 &&
@@ -141,7 +141,7 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
                 /* sid is returned from match_packet */ 0,
                 "Attack detected",
                 payload);
-            printf("    Request: %.200s\n\n", payload);
+            printf("Request: %.200s\n\n", payload);
         } else {
             printf("==> Clean request\n\n");
         }
@@ -185,7 +185,7 @@ int main(int argc, char *argv[]){
     char *dev;                      // Device to sniff on
     char errbuf[PCAP_ERRBUF_SIZE];  // Error String
     struct bpf_program fp;          // The compiled filter
-    char filter_exp[] = "tcp port 80 or tcp port 443";     // The filter expression
+    char filter_exp[] = "tcp port 80 or tcp port 443 or tcp port 8080";     // The filter expression
     bpf_u_int32 mask;               // Subnet mask
     bpf_u_int32 net;                // The IP
 
@@ -212,7 +212,11 @@ int main(int argc, char *argv[]){
         return 2;
     }
     
-    dev = alldevs->name;
+    if (argc >= 2) {
+        dev = argv[1];
+    } else {
+        dev = "lo";
+    }
     printf("\nUsing device: %s\n", dev);
     
     // Find the properties for the device
@@ -229,6 +233,20 @@ int main(int argc, char *argv[]){
         pcap_freealldevs(alldevs);
         return 2;
     }
+
+    // Detect the link layer type and set the correct header length.
+    int link_type = pcap_datalink(handle);
+    switch (link_type) {
+        case DLT_EN10MB:   g_link_header_len = 14; break;  // Ethernet
+        case DLT_NULL:     g_link_header_len =  4; break;  // Loopback (Linux/macOS)
+        case DLT_LOOP:     g_link_header_len =  4; break;  // Loopback
+        case DLT_LINUX_SLL:g_link_header_len = 16; break;  // Linux cooked capture
+        default:
+            fprintf(stderr, "Unknown link type %d, assuming Ethernet\n", link_type);
+            g_link_header_len = 14;
+    }
+    printf("Link type: %s (header = %d bytes)\n",
+           pcap_datalink_val_to_name(link_type), g_link_header_len);
 
     printf("Opened device successfully\n");
 

@@ -1,8 +1,23 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include <time.h>
 #include "../include/anomaly.h"
+
+static char *strcasestr_custom(const char *haystack, const char *needle) {
+    if (!*needle) return (char *) haystack;
+    for (; *haystack; haystack++) {
+        if (tolower((unsigned char)*haystack) == tolower((unsigned char) *needle)) {
+            const char *h = haystack, *n = needle;
+            while (*h && *n && tolower((unsigned char)*h) == tolower((unsigned char)*n)) {
+                h++; n++;
+            }
+            if (!*n) return (char *)haystack;
+        }
+    }
+    return NULL;
+}
 
 // Rate Limit
 #define MAX_IPS         1024
@@ -45,6 +60,25 @@ static ip_rate_t *get_rate_entry(const char *src_ip) {
     return NULL; // Table's fulled
 }
 
+static int check_rate(const char *src_ip) {
+    ip_rate_t *entry = get_rate_entry(src_ip);
+    if (!entry) return 0;
+
+    entry->count++;
+
+    if (entry->count == RATE_THRESHOLD + 1) {
+        printf("[ANOMALY] Rate limit exceeded: %s (%d req/%ds)\n",
+                src_ip, entry->count, RATE_WINDOW_SEC);
+        return 1;
+    }
+    if (entry->count > RATE_THRESHOLD && entry->count % 10 == 0) {
+        printf("[ANOMALY] Rate sill high: %s (%d req\n)",
+                src_ip, entry->count);
+        return 1;
+    }
+    return 0;
+}
+
 // URL Length Anomaly
 #define URL_LEN_THRESHOLD 1024
 
@@ -70,9 +104,10 @@ static int check_url_length(const char *payload) {
 }
 
 // User-Agent Anomaly
-static const char *KNOWN_UA[] = {
-    "Mozilla", "Chrome", "Safari", "Firefox",
-    "Edge", "curl", "Wget", "python-requests",
+static const char *MALICIOUS_UA[] = {
+    "sqlmap", "nikto", "nmap", "acunetix",
+    "masscan", "zgrab", "dirbuster", "gobuster",
+    "wfuzz", "burpsuite", "havij", "pangolin",
     NULL
 };
 
@@ -86,17 +121,20 @@ static int check_user_agent(const char *payload) {
 
     int ua_len = (int)(ua_end - ua_start);
 
-    if (ua_len < 8) {
+    if (ua_len < 4) {
         printf("[ANOMALY] Suspiciously short User-Agent: %.*s\n", ua_len, ua_start);
         return 1;
     }
 
-    for (int i = 0; KNOWN_UA[i] != NULL; i++) {
-        if (strstr(ua_start, KNOWN_UA[i])) return 0;
+    for (int i = 0; MALICIOUS_UA[i] != NULL; i++) {
+        if (strcasestr_custom(ua_start, MALICIOUS_UA[i])) {
+            printf("[ANOMALY] Malicious User-Agent detected: %.*s\n",
+                   ua_len, ua_start);
+            return 1;
+        }
     }
 
-    printf("[ANOMALY] Unknown User-Agent: %.*s\n", ua_len, ua_start);
-    return 1;
+    return 0;
 }
 
 // Public Interface
@@ -104,15 +142,7 @@ int anomaly_check(const char *src_ip, const char *payload, int payload_len) {
     int anomalies = 0;
 
     // 1. Rate Check
-    ip_rate_t *entry = get_rate_entry(src_ip);
-    if (entry) {
-        entry->count++;
-        if (entry->count > RATE_THRESHOLD) {
-            printf("[ANOMALY] Rate limit exceeded: %s (%d req in %ds)\n",
-                   src_ip, entry->count, RATE_WINDOW_SEC);
-            anomalies++;
-        }
-    }
+    anomalies += check_rate(src_ip);
 
     // 2. URL Length
     anomalies += check_url_length(payload);
