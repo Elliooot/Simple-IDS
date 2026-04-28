@@ -143,7 +143,14 @@ print()
 print(f"{YELLOW}[ Anomaly: Rate Limiting ]{RESET}")
 print(f"  Sending 120 rapid requests to trigger rate alert...")
 for i in range(120):
-    send_raw_http("/")
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(0.5)  # ← 改成 0.5 秒，不是 3 秒
+        s.connect((HOST, PORT))
+        s.send(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        s.close()
+    except:
+        pass
 print(f"  {RED}→ should have triggered rate alert after 100 req{RESET}")
 print()
 

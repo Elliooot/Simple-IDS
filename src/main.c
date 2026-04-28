@@ -96,7 +96,8 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
     if(ip_header->ip_p != IPPROTO_TCP) return;
 
     int ip_header_len = ip_header->ip_hl * 4;
-    struct tcphdr *tcp = (struct tcphdr *)(packet + 14 + ip_header_len);
+
+    struct tcphdr *tcp = (struct tcphdr *)(packet + g_link_header_len + ip_header_len);
 
     // Get current port
     int dst_port = ntohs(tcp->th_dport);
@@ -106,8 +107,9 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
 
     // Get payload
     int tcp_len = tcp->th_off * 4;
-    const char *payload = (char *)(packet + 14 + ip_header_len + tcp_len);
-    int payload_len = header->len - (14 + ip_header_len + tcp_len);
+
+    const char *payload = (char *)(packet + g_link_header_len + ip_header_len + tcp_len);
+    int payload_len = header->len - (g_link_header_len + ip_header_len + tcp_len);
 
     if(payload_len <= 0) return;
 
@@ -123,9 +125,11 @@ void packet_handler(u_char *user, const struct pcap_pkthdr *header, const u_char
                 return;
         }
 
+        int rule_port = (dst_port == 8080) ? 80 : dst_port;
+
         // --- Detect Attack ---
         // 1. Signiture Comparison
-        int sig_matches = match_packet(payload, payload_len, "tcp", dst_port);
+        int sig_matches = match_packet(payload, payload_len, "tcp", rule_port);
 
         // 2. Anomaly Detection
         int ano_matches = anomaly_check(
