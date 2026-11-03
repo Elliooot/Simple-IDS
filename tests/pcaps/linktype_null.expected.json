@@ -1,0 +1,12 @@
+{
+  "description": "Decoding with link type 0",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 45000,
+      "dest_port": 80
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "description": "Benign requests must not alert",
+  "bugs": [],
+  "alerts": []
+}

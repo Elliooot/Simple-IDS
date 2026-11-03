@@ -1,0 +1,24 @@
+{
+  "description": "Per-IP request rate over a 60 s window (uses packet time)",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 900001,
+      "src_ip": "10.0.0.9",
+      "src_port": 20100,
+      "dest_port": 80
+    },
+    {
+      "sid": 900001,
+      "src_ip": "10.0.0.9",
+      "src_port": 20109,
+      "dest_port": 80
+    },
+    {
+      "sid": 900001,
+      "src_ip": "10.0.0.9",
+      "src_port": 20119,
+      "dest_port": 80
+    }
+  ]
+}

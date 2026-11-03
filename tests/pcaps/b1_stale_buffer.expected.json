@@ -1,0 +1,14 @@
+{
+  "description": "Matching must stop at payload_len (no NUL terminator)",
+  "bugs": [
+    "B1"
+  ],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 46000,
+      "dest_port": 80
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "description": "New source is still rate-limited after the IP table fills",
+  "bugs": [
+    "B8"
+  ],
+  "alerts": [
+    {
+      "sid": 900001,
+      "src_ip": "10.2.0.1",
+      "src_port": 11100,
+      "dest_port": 80
+    }
+  ]
+}

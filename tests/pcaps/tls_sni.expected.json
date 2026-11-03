@@ -1,0 +1,30 @@
+{
+  "description": "SNI extraction: matches, nocase, and malformed ClientHellos",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 7001,
+      "src_ip": "10.0.0.2",
+      "src_port": 44300,
+      "dest_port": 443
+    },
+    {
+      "sid": 7002,
+      "src_ip": "10.0.0.2",
+      "src_port": 44301,
+      "dest_port": 443
+    },
+    {
+      "sid": 7001,
+      "src_ip": "10.0.0.2",
+      "src_port": 44302,
+      "dest_port": 443
+    },
+    {
+      "sid": 7001,
+      "src_ip": "10.0.0.2",
+      "src_port": 44310,
+      "dest_port": 443
+    }
+  ]
+}
