@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.variant }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        variant: [release, asan]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install libpcap (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libpcap-dev
+
+      - name: Build and test (release)
+        if: matrix.variant == 'release'
+        run: |
+          make WERROR=1
+          make WERROR=1 test
+
+      - name: Build and test (AddressSanitizer + UBSan)
+        if: matrix.variant == 'asan'
+        run: make WERROR=1 SAN=1 test
+
+  hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No build artifacts in the repository (B15)
+        run: |
+          if git ls-files | grep -E '(^|/)(SimpleIDS|sniffer)$|\.o$|\.pyc$|__pycache__'; then
+            echo "::error::build artifacts are tracked by git"
+            exit 1
+          fi
+
+      - name: Regression pcaps match their generator
+        run: |
+          python3 tests/regression/gen_pcaps.py
+          git diff --exit-code -- tests/pcaps
