@@ -1,0 +1,16 @@
+{
+  "description": "Overlapping queued segments with --overlap first",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 900005,
+      "src_ip": "10.0.0.2",
+      "src_port": 53000,
+      "dest_port": 80
+    }
+  ],
+  "args": [
+    "--overlap",
+    "first"
+  ]
+}

@@ -92,6 +92,70 @@ def http_frame(case, sport, src=CLIENT, wrap=ether):
     return wrap(ipv4_tcp(src, SERVER, sport, case.port, case.request()))
 
 
+def vlan_ether(l3, ethertype, tags):
+    """Ethernet frame with VLAN tags, outermost first: [(tpid, vid), ...]."""
+    frame = bytes.fromhex("020000000001") + bytes.fromhex("020000000002")
+    for tpid, vid in tags:
+        frame += struct.pack("!HH", tpid, vid)
+    return frame + struct.pack("!H", ethertype) + l3
+
+
+def ip6_aton(s):
+    import ipaddress
+    return ipaddress.IPv6Address(s).packed
+
+
+def ipv6_packet(src, dst, next_header, l4, ext=b""):
+    """ext: pre-built extension headers (their next-header fields set)."""
+    payload = ext + l4
+    return struct.pack("!IHBB", 6 << 28, len(payload), next_header, 64) + \
+        ip6_aton(src) + ip6_aton(dst) + payload
+
+
+def tcp_hdr(sport, dport, seq, ack, flags, payload):
+    return struct.pack("!HHIIBBHHH", sport, dport, seq & 0xFFFFFFFF, ack & 0xFFFFFFFF,
+                       5 << 4, flags, 65535, 0, 0) + payload
+
+
+SYN, ACK, PSH, FIN, RST = 0x02, 0x10, 0x08, 0x01, 0x04
+
+
+class Conn:
+    """A TCP connection that produces frames with correct sequence numbers.
+
+    Payload offsets are relative to the first data byte, so tests can send
+    any byte range in any order (out of order, overlapping, missing).
+    """
+
+    def __init__(self, cport, client=CLIENT, server=SERVER, sport=80,
+                 isn=1000, sisn=5000, v6=False, wrap=None):
+        self.c, self.s, self.cp, self.sp = client, server, cport, sport
+        self.isn, self.sisn, self.v6 = isn, sisn, v6
+        self.wrap = wrap
+
+    def _frame(self, to_server, seq, ack, flags, payload=b""):
+        src, dst = (self.c, self.s) if to_server else (self.s, self.c)
+        sp, dp = (self.cp, self.sp) if to_server else (self.sp, self.cp)
+        if self.v6:
+            l3 = ipv6_packet(src, dst, 6, tcp_hdr(sp, dp, seq, ack, flags, payload))
+            etype = 0x86DD
+        else:
+            l3 = ipv4(src, dst, tcp_hdr(sp, dp, seq, ack, flags, payload))
+            etype = 0x0800
+        return self.wrap(l3, etype) if self.wrap else ether(l3, etype)
+
+    def handshake(self):
+        return [self._frame(True, self.isn, 0, SYN),
+                self._frame(False, self.sisn, self.isn + 1, SYN | ACK),
+                self._frame(True, self.isn + 1, self.sisn + 1, ACK)]
+
+    def data(self, offset, payload, flags=PSH | ACK):
+        return self._frame(True, self.isn + 1 + offset, self.sisn + 1, flags, payload)
+
+    def fin(self, offset):
+        return self._frame(True, self.isn + 1 + offset, self.sisn + 1, FIN | ACK)
+
+
 # --------------------------------------------------------------------------
 # TLS ClientHello
 # --------------------------------------------------------------------------
@@ -138,9 +202,11 @@ def write_pcap(name, linktype, packets, snaplen=65535):
     return path
 
 
-def write_expected(name, description, alerts, bugs=()):
+def write_expected(name, description, alerts, bugs=(), args=()):
     alerts = sorted(alerts, key=lambda a: (a["src_ip"], a["src_port"], a["sid"]))
     doc = {"description": description, "bugs": list(bugs), "alerts": alerts}
+    if args:
+        doc["args"] = list(args)
     with open(os.path.join(OUT_DIR, name + ".expected.json"), "w") as f:
         json.dump(doc, f, indent=2)
         f.write("\n")
@@ -151,9 +217,9 @@ def alert(sid, sport, dport=80, src=CLIENT):
 
 
 def emit(name, description, packets, alerts, linktype=LINKTYPE_ETHERNET,
-         snaplen=65535, bugs=()):
+         snaplen=65535, bugs=(), args=()):
     write_pcap(name, linktype, packets, snaplen)
-    write_expected(name, description, alerts, bugs)
+    write_expected(name, description, alerts, bugs, args)
     print(f"  {name}.pcap: {len(packets)} packets, {len(alerts)} expected alerts")
 
 
@@ -240,6 +306,13 @@ def gen_tls():
     # segments: the first segment still carries the SNI.
     big = client_hello([sni_ext(b"malicious.com"), tls_ext(51, bytes(1500))])
     add(44310, big[:200], {7001})
+    # Same, but the SNI sits in the second segment: needs reassembly.
+    late = client_hello([SUPPORTED_VERSIONS, tls_ext(51, bytes(1400)),
+                         sni_ext(b"phishing.net")])
+    c = Conn(44311, sport=443)
+    for frame in c.handshake() + [c.data(0, late[:1000]), c.data(1000, late[1000:])]:
+        packets.append((T0 + len(packets), frame))
+    alerts.append(alert(7002, 44311, 443))
 
     emit("tls_sni", "SNI extraction: matches, nocase, and malformed ClientHellos",
          packets, alerts)
@@ -282,8 +355,9 @@ def gen_b2_truncated():
 
 
 def gen_b6_non_ipv4():
-    """An IPv6 packet must be skipped (IPv6 decoding is Phase 2), not parsed
-    as IPv4; the IPv4 packet after it must still be inspected."""
+    """IPv6 must be decoded as IPv6 (Phase 1.5 skipped it, Phase 2 decodes
+    it), never parsed as IPv4; a frame whose ethertype says IPv4 but whose
+    version nibble is 6 is rejected."""
     req = b"GET /?x=<script> HTTP/1.1\r\n\r\n"
     packets = [
         (T0, ether(ipv6_tcp(48000, 80, req), ethertype=0x86DD)),
@@ -291,8 +365,9 @@ def gen_b6_non_ipv4():
         # Ethertype says IPv4 but the version nibble is 6.
         (T0 + 2, ether(b"\x60" + ipv4_tcp(CLIENT, SERVER, 48002, 80, req)[1:])),
     ]
-    emit("b6_non_ipv4", "Only real IPv4 is decoded; others are counted and skipped",
-         packets, [alert(1001, 48001)], bugs=["B6", "B13"])
+    alerts = [alert(1001, 48000, src="fd00::2"), alert(1001, 48001)]
+    emit("b6_non_ipv4", "IPv6 and IPv4 are each decoded by their own rules",
+         packets, alerts, bugs=["B6", "B13"])
 
 
 def gen_b10_json():
@@ -303,6 +378,184 @@ def gen_b10_json():
     alerts = [alert(1001, 49000), alert(5001, 49000), alert(900004, 49000)]
     emit("b10_json_escape", "Alert log stays valid JSON for hostile payloads",
          packets, alerts, bugs=["B10"])
+
+
+# --------------------------------------------------------------------------
+# Phase 2: flows, reassembly, IPv6, VLAN
+# --------------------------------------------------------------------------
+
+REQ_TAIL = b" HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n\r\n"
+
+
+class Timeline:
+    """Collects frames with increasing timestamps."""
+
+    def __init__(self, start=T0):
+        self.t, self.packets = start, []
+
+    def add(self, *frames, step=0.01):
+        for f in frames:
+            self.packets.append((self.t, f))
+            self.t += step
+
+
+def gen_stream_split():
+    """Acceptance test: <script> split into 3 segments, sent out of order."""
+    tl, alerts = Timeline(), []
+    parts = [b"GET /?x=<scr", b"ip", b"t>" + REQ_TAIL]
+    offs = [0, len(parts[0]), len(parts[0]) + len(parts[1])]
+
+    for cport, order in ((51000, (2, 0, 1)), (51001, (1, 2, 0)), (51002, (0, 1, 2))):
+        c = Conn(cport)
+        tl.add(*c.handshake())
+        tl.add(*[c.data(offs[i], parts[i]) for i in order])
+        alerts.append(alert(1001, cport))
+
+    # Mid-stream pickup (no handshake seen), split in order.
+    c = Conn(51003)
+    tl.add(*[c.data(offs[i], parts[i]) for i in (0, 1, 2)])
+    alerts.append(alert(1001, 51003))
+
+    # A 1100-character URL split over two segments: only the whole request
+    # line is long enough to be an anomaly.
+    req = b"GET /?q=" + b"A" * 1092 + REQ_TAIL
+    c = Conn(51004)
+    tl.add(*c.handshake(), c.data(0, req[:600]), c.data(600, req[600:]))
+    alerts.append(alert(900002, 51004))
+
+    # The scanner name split across segments inside the User-Agent header.
+    req = b"GET / HTTP/1.1\r\nHost: t\r\nUser-Agent: sqlmap/1.7\r\n\r\n"
+    cut = req.index(b"map")
+    c = Conn(51005)
+    tl.add(*c.handshake(), c.data(cut, req[cut:]), c.data(0, req[:cut]))
+    alerts += [alert(5001, 51005), alert(900004, 51005)]
+
+    emit("stream_split_ooo", "Signatures split across out-of-order TCP segments",
+         tl.packets, alerts)
+
+
+def gen_stream_retransmit():
+    tl, alerts = Timeline(), []
+
+    # Identical retransmission: one alert, not two.
+    req = b"GET /?x=<script>" + REQ_TAIL
+    c = Conn(52000)
+    tl.add(*c.handshake(), c.data(0, req), c.data(0, req))
+    alerts.append(alert(1001, 52000))
+
+    # Retransmission that rewrites bytes the receiver already accepted. A
+    # real TCP stack keeps the original, so no XSS alert, but the
+    # inconsistency itself is reported.
+    req = b"GET /?x=AAAAAAAA" + REQ_TAIL
+    c = Conn(52001)
+    tl.add(*c.handshake(), c.data(0, req), c.data(8, b"<script>"))
+    alerts.append(alert(900005, 52001))
+
+    # Keep-alive: two requests on one connection. The signature fires once
+    # per flow; anomalies are checked for every request.
+    r1 = b"GET /?x=<script>" + REQ_TAIL
+    r2 = b"GET /?y=<script> HTTP/1.1\r\nHost: t\r\nUser-Agent: X\r\n\r\n"
+    c = Conn(52002)
+    tl.add(*c.handshake(), c.data(0, r1), c.data(len(r1), r2))
+    alerts += [alert(1001, 52002), alert(900003, 52002)]
+
+    # POST with a body: the next request starts after Content-Length bytes.
+    body = b"GET /looks-like-a-request-but-is-body"
+    r1 = b"POST /f HTTP/1.1\r\nContent-Length: %d\r\n\r\n" % len(body) + body
+    r2 = b"GET / HTTP/1.1\r\nUser-Agent: Nikto\r\n\r\n"
+    c = Conn(52003)
+    tl.add(*c.handshake(), c.data(0, r1), c.data(len(r1), r2))
+    alerts += [alert(5002, 52003), alert(900004, 52003)]
+
+    emit("stream_retransmit", "Retransmissions, rewritten data and keep-alive requests",
+         tl.packets, alerts)
+
+
+def gen_stream_overlap():
+    """Queued segments overlap with different bytes: which ones the target
+    keeps depends on its OS, so the policy is configurable."""
+    head = b"GET /?x="
+    seg_a = b"<scrXXXX" + REQ_TAIL       # offset 8
+    seg_b = b"ipt>"                      # offset 12, overlaps "XXXX"
+    for policy, sids in (("first", [900005]), ("last", [900005, 1001])):
+        tl = Timeline()
+        c = Conn(53000)
+        tl.add(*c.handshake(), c.data(8, seg_a), c.data(12, seg_b), c.data(0, head))
+        emit(f"stream_overlap_{policy}",
+             f"Overlapping queued segments with --overlap {policy}",
+             tl.packets, [alert(s, 53000) for s in sids], args=["--overlap", policy])
+
+
+def gen_stream_gap():
+    """A lost segment: data on both sides is inspected separately, so the
+    pieces around the hole never combine into a false match."""
+    tl = Timeline()
+    c = Conn(54000)
+    seg0 = b"GET /?x=<scr"                              # [0, 12)
+    lost = b"XYZ"                                       # [12, 15) never sent
+    seg2 = b"ipt> HTTP/1.1\r\nX: ../\r\n\r\n"            # [15, ...)
+    tl.add(*c.handshake(), c.data(0, seg0), c.data(len(seg0) + len(lost), seg2))
+    emit("stream_gap", "No match across a hole; data after it is still inspected",
+         tl.packets, [alert(4001, 54000)])
+
+
+def gen_vlan():
+    tl, alerts = Timeline(), []
+    req = b"GET /?x=<script>" + REQ_TAIL
+
+    variants = [
+        (55000, None, False),                                  # untagged
+        (55001, [(0x8100, 100)], False),                       # 802.1Q
+        (55002, [(0x88A8, 200), (0x8100, 100)], False),        # QinQ
+        (55003, [(0x8100, 100)], True),                        # 802.1Q + IPv6
+    ]
+    for cport, tags, v6 in variants:
+        wrap = (lambda l3, et, t=tags: vlan_ether(l3, et, t)) if tags else None
+        kw = {"client": "fd00::2", "server": "fd00::1"} if v6 else {}
+        c = Conn(cport, v6=v6, wrap=wrap, **kw)
+        tl.add(*c.handshake(), c.data(0, req))
+        alerts.append(alert(1001, cport, src="fd00::2" if v6 else CLIENT))
+    emit("vlan", "802.1Q and QinQ tagged traffic (default BPF filter included)",
+         tl.packets, alerts)
+
+
+def gen_ipv6():
+    tl, alerts = Timeline(), []
+    parts = [b"GET /?x=<scr", b"ipt>" + REQ_TAIL]
+    c = Conn(56000, client="2001:db8::2", server="2001:db8::1", v6=True)
+    tl.add(*c.handshake(), c.data(len(parts[0]), parts[1]), c.data(0, parts[0]))
+    alerts.append(alert(1001, 56000, src="2001:db8::2"))
+
+    # Extension headers before TCP: hop-by-hop (0) -> destination options (60).
+    req = b"GET /?x=<script>" + REQ_TAIL
+    tcp = tcp_hdr(56001, 80, 1, 1, PSH | ACK, req)
+    ext = bytes([60, 0, 1, 4, 0, 0, 0, 0]) + bytes([6, 0, 1, 4, 0, 0, 0, 0])
+    tl.add(ether(ipv6_packet("2001:db8::2", "2001:db8::1", 0, tcp, ext), 0x86DD))
+    alerts.append(alert(1001, 56001, src="2001:db8::2"))
+
+    # A non-first fragment carries no TCP header: skipped, never parsed.
+    frag = bytes([6, 0]) + struct.pack("!HI", (8 << 3), 0x1234)
+    tl.add(ether(ipv6_packet("2001:db8::2", "2001:db8::1", 44, req, frag), 0x86DD))
+
+    # libpcap's "tcp port 80" cannot see past IPv6 extension headers, so
+    # this pcap is read without a capture filter.
+    emit("ipv6", "IPv6 with reassembly, extension headers and fragments",
+         tl.packets, alerts, args=["-f", ""])
+
+
+def gen_flow_eviction():
+    """With room for only 2 flows, a third evicts the least recently used.
+    The evicted flow is inspected before it is dropped."""
+    tl, alerts = Timeline(), []
+    a, b, c = Conn(57000), Conn(57001), Conn(57002)
+    long_req = b"GET /?q=" + b"B" * 1100     # request line never completes
+    tl.add(*a.handshake(), a.data(0, long_req))
+    tl.add(*b.handshake(), b.data(0, b"GET /?x=<script>" + REQ_TAIL))
+    tl.add(*c.handshake())                   # evicts A: its partial request
+    alerts.append(alert(900002, 57000))      # is checked on the way out
+    alerts.append(alert(1001, 57001))
+    emit("flow_eviction", "Bounded flow table: LRU eviction flushes the evicted flow",
+         tl.packets, alerts, args=["--max-flows", "2"])
 
 
 def main():
@@ -317,6 +570,13 @@ def main():
     gen_b2_truncated()
     gen_b6_non_ipv4()
     gen_b10_json()
+    gen_stream_split()
+    gen_stream_retransmit()
+    gen_stream_overlap()
+    gen_stream_gap()
+    gen_vlan()
+    gen_ipv6()
+    gen_flow_eviction()
 
 
 if __name__ == "__main__":

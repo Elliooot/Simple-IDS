@@ -1,0 +1,48 @@
+{
+  "description": "Signatures split across out-of-order TCP segments",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 51000,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 51001,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 51002,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 51003,
+      "dest_port": 80
+    },
+    {
+      "sid": 900002,
+      "src_ip": "10.0.0.2",
+      "src_port": 51004,
+      "dest_port": 80
+    },
+    {
+      "sid": 5001,
+      "src_ip": "10.0.0.2",
+      "src_port": 51005,
+      "dest_port": 80
+    },
+    {
+      "sid": 900004,
+      "src_ip": "10.0.0.2",
+      "src_port": 51005,
+      "dest_port": 80
+    }
+  ]
+}

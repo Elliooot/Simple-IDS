@@ -1,0 +1,30 @@
+{
+  "description": "802.1Q and QinQ tagged traffic (default BPF filter included)",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 55000,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 55001,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 55002,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "fd00::2",
+      "src_port": 55003,
+      "dest_port": 80
+    }
+  ]
+}

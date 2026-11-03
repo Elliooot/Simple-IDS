@@ -44,8 +44,8 @@ int rule_parse(const char *line, rule_t *out, char *err, size_t errlen);
  */
 int rules_load_file(const char *path, int *errors);
 
-/* Called once per rule that matches. */
-typedef void (*rule_hit_fn)(const rule_t *rule, void *ctx);
+/* Called once per rule that matches; match points at the first match. */
+typedef void (*rule_hit_fn)(const rule_t *rule, const uint8_t *match, void *ctx);
 
 /*
  * Run every enabled rule for (protocol, dst_port) over buf[0..len).
@@ -59,6 +59,10 @@ int rules_match(const uint8_t *buf, size_t len, const char *protocol,
 int rules_add(const rule_t *rule);
 
 int  rules_count(void);
+
+/* Longest content of any loaded rule (0 when none): a match can span at
+ * most this many bytes, which bounds how far back a stream rescan goes. */
+size_t rules_max_content_len(void);
 void rules_free(void);
 
 #endif

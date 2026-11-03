@@ -398,9 +398,10 @@ int rules_match(const uint8_t *buf, size_t len, const char *protocol,
             continue;
         if (r->dst_port != 0 && r->dst_port != dst_port)
             continue;
-        if (bytes_find(buf, len, r->content, r->content_len, r->nocase)) {
+        const uint8_t *m = bytes_find(buf, len, r->content, r->content_len, r->nocase);
+        if (m) {
             matches++;
-            if (hit) hit(r, ctx);
+            if (hit) hit(r, m, ctx);
         }
     }
     return matches;
@@ -408,6 +409,13 @@ int rules_match(const uint8_t *buf, size_t len, const char *protocol,
 
 int rules_count(void) {
     return g_count;
+}
+
+size_t rules_max_content_len(void) {
+    size_t m = 0;
+    for (int i = 0; i < g_count; i++)
+        if (g_rules[i].content_len > m) m = g_rules[i].content_len;
+    return m;
 }
 
 void rules_free(void) {

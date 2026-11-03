@@ -11,6 +11,7 @@
 #define ANOMALY_SID_LONG_URL   900002
 #define ANOMALY_SID_SHORT_UA   900003
 #define ANOMALY_SID_BAD_UA     900004
+#define ANOMALY_SID_STREAM_OVERLAP 900005 /* raised by the engine */
 
 #define ANOMALY_MAX_IPS        1024 /* rate table size (LRU eviction)  */
 #define ANOMALY_RATE_WINDOW    60   /* seconds                          */

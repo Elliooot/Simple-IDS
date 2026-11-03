@@ -1,0 +1,22 @@
+{
+  "description": "Bounded flow table: LRU eviction flushes the evicted flow",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 900002,
+      "src_ip": "10.0.0.2",
+      "src_port": 57000,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 57001,
+      "dest_port": 80
+    }
+  ],
+  "args": [
+    "--max-flows",
+    "2"
+  ]
+}

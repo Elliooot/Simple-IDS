@@ -1,5 +1,5 @@
 {
-  "description": "Only real IPv4 is decoded; others are counted and skipped",
+  "description": "IPv6 and IPv4 are each decoded by their own rules",
   "bugs": [
     "B6",
     "B13"
@@ -9,6 +9,12 @@
       "sid": 1001,
       "src_ip": "10.0.0.2",
       "src_port": 48001,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "fd00::2",
+      "src_port": 48000,
       "dest_port": 80
     }
   ]

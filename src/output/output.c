@@ -117,9 +117,14 @@ static void console_preview(char *dst, size_t dstlen, const uint8_t *src, size_t
     dst[n] = '\0';
 }
 
+/* "1.2.3.4:80" or "[2001:db8::1]:80" */
+static void fmt_endpoint(char *buf, size_t len, const char *ip, uint16_t port) {
+    if (strchr(ip, ':')) snprintf(buf, len, "[%s]:%u", ip, port);
+    else snprintf(buf, len, "%s:%u", ip, port);
+}
+
 void output_alert(const alert_event_t *ev) {
     char ts[40];
-    const packet_t *p = ev->pkt;
     const char *src_name = ev->source == ALERT_SOURCE_ANOMALY ? "anomaly" : "signature";
 
     g_alerts++;
@@ -127,31 +132,35 @@ void output_alert(const alert_event_t *ev) {
 
     if (!g_quiet) {
         FILE *con = output_console();
-        char prev[PAYLOAD_CONSOLE_MAX + 1];
+        char prev[PAYLOAD_CONSOLE_MAX + 1], src[64], dst[64];
         console_preview(prev, sizeof(prev), ev->data, ev->data_len);
+        fmt_endpoint(src, sizeof(src), ev->src_ip, ev->src_port);
+        fmt_endpoint(dst, sizeof(dst), ev->dst_ip, ev->dst_port);
         fprintf(con, "[ALERT] %s SID:%d P%d | %s\n", ts, ev->sid, ev->priority, ev->msg);
-        fprintf(con, "        %s:%u -> %s:%u\n",
-                p->src_ip, p->src_port, p->dst_ip, p->dst_port);
+        fprintf(con, "        %s -> %s\n", src, dst);
         if (prev[0]) fprintf(con, "        %s\n", prev);
     }
 
     if (g_log) {
         char msg[MSG_JSON_MAX];
         char payload[PAYLOAD_LOG_MAX * 6 + 1];
+        char app[32] = "";
         size_t plen = ev->data_len < PAYLOAD_LOG_MAX ? ev->data_len : PAYLOAD_LOG_MAX;
 
         json_escape(msg, sizeof(msg), (const uint8_t *)ev->msg, strlen(ev->msg));
         json_escape(payload, sizeof(payload), ev->data, plen);
+        if (ev->app_proto) snprintf(app, sizeof(app), "\"app_proto\":\"%s\",", ev->app_proto);
 
         fprintf(g_log,
-                "{\"timestamp\":\"%s\",\"event_type\":\"alert\","
+                "{\"timestamp\":\"%s\",\"flow_id\":%llu,\"event_type\":\"alert\","
                 "\"src_ip\":\"%s\",\"src_port\":%u,"
-                "\"dest_ip\":\"%s\",\"dest_port\":%u,\"proto\":\"TCP\","
+                "\"dest_ip\":\"%s\",\"dest_port\":%u,\"proto\":\"TCP\",%s"
                 "\"alert\":{\"sid\":%d,\"priority\":%d,\"source\":\"%s\",\"msg\":\"%s\"},"
                 "\"payload\":\"%s\",\"payload_truncated\":%s}\n",
-                ts, p->src_ip, p->src_port, p->dst_ip, p->dst_port,
+                ts, (unsigned long long)ev->flow_id,
+                ev->src_ip, ev->src_port, ev->dst_ip, ev->dst_port, app,
                 ev->sid, ev->priority, src_name, msg,
-                payload, (plen < ev->data_len || p->truncated) ? "true" : "false");
+                payload, (plen < ev->data_len || ev->truncated) ? "true" : "false");
         fflush(g_log);
     }
 }

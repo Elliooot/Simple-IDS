@@ -37,7 +37,7 @@ def key(a):
 def run_one(binary, pcap, expected):
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "alerts.json")
-        proc = subprocess.run([binary, "-r", pcap, "-l", log, "-q"],
+        proc = subprocess.run([binary, "-r", pcap, "-l", log, "-q"] + expected.get("args", []),
                               cwd=REPO, capture_output=True, text=True)
         errors = []
         if proc.returncode != 0:

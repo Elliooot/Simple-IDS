@@ -165,8 +165,9 @@ static void test_parse_ignores_metadata(void) {
 static int g_hits[8];
 static int g_nhits;
 
-static void collect(const rule_t *r, void *ctx) {
+static void collect(const rule_t *r, const uint8_t *match, void *ctx) {
     (void)ctx;
+    (void)match;
     if (g_nhits < 8) g_hits[g_nhits++] = r->sid;
 }
 

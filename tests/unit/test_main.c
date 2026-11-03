@@ -12,6 +12,8 @@ extern const test_case_t http_tests[];
 extern const test_case_t tls_tests[];
 extern const test_case_t anomaly_tests[];
 extern const test_case_t output_tests[];
+extern const test_case_t flow_tests[];
+extern const test_case_t stream_tests[];
 extern const test_case_t engine_tests[];
 
 static const struct {
@@ -25,6 +27,8 @@ static const struct {
     { "tls",     tls_tests },
     { "anomaly", anomaly_tests },
     { "output",  output_tests },
+    { "flow",    flow_tests },
+    { "stream",  stream_tests },
     { "engine",  engine_tests },
 };
 

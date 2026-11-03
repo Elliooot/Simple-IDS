@@ -25,6 +25,12 @@
       "src_ip": "10.0.0.2",
       "src_port": 44310,
       "dest_port": 443
+    },
+    {
+      "sid": 7002,
+      "src_ip": "10.0.0.2",
+      "src_port": 44311,
+      "dest_port": 443
     }
   ]
 }

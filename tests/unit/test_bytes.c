@@ -1,4 +1,5 @@
 #include "simpleids/bytes.h"
+#include "simpleids/siphash.h"
 #include "test.h"
 
 /* B1: searching must stay inside [0, len) even without a NUL. */
@@ -52,6 +53,23 @@ static void test_read_be_unaligned(void) {
     CHECK_EQ_INT(rd_le32(raw + 1), 0x78563412);
 }
 
+/* Reference vectors from the SipHash paper (key 00..0f). */
+static void test_siphash_vectors(void) {
+    uint8_t key[16], msg[16];
+    for (int i = 0; i < 16; i++) key[i] = (uint8_t)i, msg[i] = (uint8_t)i;
+    CHECK(siphash24(key, msg, 0) == 0x726fdb47dd0e0e31ULL);
+    CHECK(siphash24(key, msg, 1) == 0x74f839c593dc67fdULL);
+    CHECK(siphash24(key, msg, 8) == 0x93f5f5799a932462ULL);
+    CHECK(siphash24(key, msg, 15) == 0xa129ca6149be45e5ULL);
+}
+
+static void test_random_bytes(void) {
+    uint8_t a[16] = { 0 }, b[16] = { 0 };
+    CHECK_EQ_INT(random_bytes(a, sizeof(a)), 0);
+    CHECK_EQ_INT(random_bytes(b, sizeof(b)), 0);
+    CHECK(memcmp(a, b, sizeof(a)) != 0);
+}
+
 const test_case_t bytes_tests[] = {
     TEST(test_find_does_not_read_past_len),
     TEST(test_find_basic),
@@ -59,5 +77,7 @@ const test_case_t bytes_tests[] = {
     TEST(test_find_across_nul),
     TEST(test_startswith),
     TEST(test_read_be_unaligned),
+    TEST(test_siphash_vectors),
+    TEST(test_random_bytes),
     TEST_END
 };

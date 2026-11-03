@@ -32,7 +32,10 @@ BIN     := SimpleIDS
 endif
 
 LIB_SRC := src/util/bytes.c \
+           src/util/siphash.c \
            src/decode/decode.c \
+           src/flow/flow.c \
+           src/stream/stream.c \
            src/app/http/http.c \
            src/app/tls/tls.c \
            src/detect/rules.c \

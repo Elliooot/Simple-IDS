@@ -48,16 +48,11 @@ static void test_alert_line_is_json(void) {
     CHECK_EQ_INT(output_open(path), 0);
     output_set_quiet(1);
 
-    packet_t p;
-    memset(&p, 0, sizeof(p));
-    strcpy(p.src_ip, "10.0.0.2");
-    strcpy(p.dst_ip, "10.0.0.1");
-    p.src_port = 1234;
-    p.dst_port = 80;
-
     const uint8_t data[] = { 'G', 'E', 'T', ' ', '"', 0x00, 0x80 };
     alert_event_t ev = {
-        .ts = { 1700000000, 0 }, .pkt = &p, .sid = 1001, .priority = 1,
+        .ts = { 1700000000, 0 },
+        .src_ip = "10.0.0.2", .dst_ip = "10.0.0.1", .src_port = 1234, .dst_port = 80,
+        .flow_id = 7, .app_proto = "http", .sid = 1001, .priority = 1,
         .msg = "quote \" and \\ backslash", .source = ALERT_SOURCE_SIGNATURE,
         .data = data, .data_len = sizeof(data),
     };
@@ -76,6 +71,8 @@ static void test_alert_line_is_json(void) {
     CHECK(strstr(line, "\"msg\":\"quote \\\" and \\\\ backslash\"") != NULL);
     CHECK(strstr(line, "\"payload\":\"GET \\\"\\u0000\\u0080\"") != NULL);
     CHECK(strstr(line, "\"src_port\":1234") != NULL);
+    CHECK(strstr(line, "\"flow_id\":7,") != NULL);
+    CHECK(strstr(line, "\"app_proto\":\"http\",") != NULL);
     CHECK_EQ_INT(line[strlen(line) - 1], '\n');
     output_set_quiet(0);
 }
