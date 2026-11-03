@@ -1,0 +1,15 @@
+{
+  "description": "Only real IPv4 is decoded; others are counted and skipped",
+  "bugs": [
+    "B6",
+    "B13"
+  ],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 48001,
+      "dest_port": 80
+    }
+  ]
+}

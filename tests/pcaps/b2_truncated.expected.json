@@ -1,0 +1,14 @@
+{
+  "description": "Payload length comes from caplen, not the on-wire length",
+  "bugs": [
+    "B2"
+  ],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 47001,
+      "dest_port": 80
+    }
+  ]
+}

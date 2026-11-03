@@ -1,4 +1,20 @@
+# Editor / OS
 .vscode/
 .DS_Store
-*.log
 *~
+
+# Build artifacts
+/SimpleIDS
+/build/
+*.o
+*.dSYM/
+src/SimpleIDS
+src/sniffer
+
+# Python
+__pycache__/
+*.pyc
+
+# Runtime output
+/logs/
+*.log

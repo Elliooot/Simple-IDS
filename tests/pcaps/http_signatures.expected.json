@@ -1,0 +1,166 @@
+{
+  "description": "One request per signature rule (incl. B5 escapes)",
+  "bugs": [
+    "B5",
+    "B7",
+    "B9"
+  ],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40000,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40001,
+      "dest_port": 80
+    },
+    {
+      "sid": 1002,
+      "src_ip": "10.0.0.2",
+      "src_port": 40002,
+      "dest_port": 80
+    },
+    {
+      "sid": 1003,
+      "src_ip": "10.0.0.2",
+      "src_port": 40003,
+      "dest_port": 80
+    },
+    {
+      "sid": 2001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40004,
+      "dest_port": 80
+    },
+    {
+      "sid": 2002,
+      "src_ip": "10.0.0.2",
+      "src_port": 40005,
+      "dest_port": 80
+    },
+    {
+      "sid": 2003,
+      "src_ip": "10.0.0.2",
+      "src_port": 40006,
+      "dest_port": 80
+    },
+    {
+      "sid": 2004,
+      "src_ip": "10.0.0.2",
+      "src_port": 40007,
+      "dest_port": 80
+    },
+    {
+      "sid": 3001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40008,
+      "dest_port": 80
+    },
+    {
+      "sid": 3002,
+      "src_ip": "10.0.0.2",
+      "src_port": 40009,
+      "dest_port": 80
+    },
+    {
+      "sid": 3003,
+      "src_ip": "10.0.0.2",
+      "src_port": 40010,
+      "dest_port": 80
+    },
+    {
+      "sid": 3004,
+      "src_ip": "10.0.0.2",
+      "src_port": 40011,
+      "dest_port": 80
+    },
+    {
+      "sid": 4001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40012,
+      "dest_port": 80
+    },
+    {
+      "sid": 4003,
+      "src_ip": "10.0.0.2",
+      "src_port": 40012,
+      "dest_port": 80
+    },
+    {
+      "sid": 4002,
+      "src_ip": "10.0.0.2",
+      "src_port": 40013,
+      "dest_port": 80
+    },
+    {
+      "sid": 4003,
+      "src_ip": "10.0.0.2",
+      "src_port": 40014,
+      "dest_port": 80
+    },
+    {
+      "sid": 4004,
+      "src_ip": "10.0.0.2",
+      "src_port": 40015,
+      "dest_port": 80
+    },
+    {
+      "sid": 5001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40016,
+      "dest_port": 80
+    },
+    {
+      "sid": 900004,
+      "src_ip": "10.0.0.2",
+      "src_port": 40016,
+      "dest_port": 80
+    },
+    {
+      "sid": 5002,
+      "src_ip": "10.0.0.2",
+      "src_port": 40017,
+      "dest_port": 80
+    },
+    {
+      "sid": 900004,
+      "src_ip": "10.0.0.2",
+      "src_port": 40017,
+      "dest_port": 80
+    },
+    {
+      "sid": 5003,
+      "src_ip": "10.0.0.2",
+      "src_port": 40018,
+      "dest_port": 80
+    },
+    {
+      "sid": 900004,
+      "src_ip": "10.0.0.2",
+      "src_port": 40018,
+      "dest_port": 80
+    },
+    {
+      "sid": 6001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40019,
+      "dest_port": 80
+    },
+    {
+      "sid": 6002,
+      "src_ip": "10.0.0.2",
+      "src_port": 40020,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 40021,
+      "dest_port": 8080
+    }
+  ]
+}
