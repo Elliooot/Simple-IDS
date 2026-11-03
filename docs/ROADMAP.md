@@ -2,7 +2,7 @@
 
 > 狀態：草案 v0.1（2026-11-03）
 > 基準版本：commit `8dbe7c3`（Phase 1 完成）
-> 進度：Phase 1.5 完成（分支 `phase-1.5`，2026-11-03）
+> 進度：Phase 2 完成（分支 `phase-2`，2026-11-03）；Phase 1.5 完成（分支 `phase-1.5`）
 > 用途：作為後續開發（含 Claude Code 雲端 session）的單一依據。每完成一項，就在對應的 checkbox 打勾，並註記 commit。
 
 ---
@@ -140,15 +140,22 @@ alert http any any -> $HOME_NET any (
 - [x] 建立 C 單元測試框架，選一個輕量的，例如 [greatest](https://github.com/silentbicycle/greatest) 或自寫的 assert 巨集（`c8665a1`：自寫，`tests/unit/test.h`）
 - [x] 建立 pcap 回歸測試：`tests/pcaps/*.pcap` 搭配 `*.expected.json`，用 `make test` 比對告警結果（`c8665a1`：`tests/regression/`）
 - [x] GitHub Actions CI：Ubuntu 和 macOS 兩個平台，跑一般建置和 ASan/UBSan 兩種建置（`a2ee01f`）
-- [x] 調整目錄結構，改成 §8 的規劃（`f82c1d3`：現有模組已搬移；`flow/`、`stream/`、`app/dns/`、`tests/fuzz/`、`etc/` 等留給對應的 Phase 建立）
+- [x] 調整目錄結構，改成 §8 的規劃（`f82c1d3`：現有模組已搬移；`flow/`、`stream/`、`app/dns/`、`tests/fuzz/`、`etc/` 等留給對應的 Phase 建立；`flow/`、`stream/` 已在 Phase 2 建立）
 - **驗收**：`make test` 全部通過，CI 是綠燈。
 
 ### Phase 2 — 解碼與連線追蹤
-- [ ] 支援 IPv6、VLAN 和 UDP 解碼
-- [ ] Flow table：雙向、有逾時、有上限、hash 加隨機種子
-- [ ] TCP 重組，可設定重疊時的處理策略
-- [ ] 能偵測攻擊字串跨封包、亂序送達的情況
+- [x] 支援 IPv6、VLAN 和 UDP 解碼（`8e1a84a`：IPv6 擴充標頭 0/43/60/51/44，非首片段計數後略過；802.1Q/802.1ad 最多 2 層；UDP 長度檢查。測試：`test_decode_ipv6_*`、`test_decode_vlan`、`test_decode_udp`、回歸 `ipv6`、`vlan`）
+- [x] Flow table：雙向、有逾時、有上限、hash 加隨機種子（`8e1a84a`：`src/flow/`，固定大小 pool + LRU 淘汰，逾時依 TCP 狀態而定，SipHash-2-4 + `/dev/urandom` 金鑰；`--max-flows`。測試：unit `flow`、回歸 `flow_eviction`）
+- [x] TCP 重組，可設定重疊時的處理策略（`8e1a84a`：`src/stream/`，`--overlap first|last` 只作用於尚未交付的位元組，已交付的永不改寫；重疊內容不一致時發 sid 900005；`--stream-depth`、`--stream-memcap`。測試：unit `stream`、回歸 `stream_overlap_first/last`、`stream_retransmit`、`stream_gap`）
+- [x] 能偵測攻擊字串跨封包、亂序送達的情況（`8e1a84a`：規則改在重組後的串流上比對，並處理 seq 繞回。測試：`test_engine_split_out_of_order`（6 種順序）、`test_engine_seq_wraparound`、回歸 `stream_split_ooo`）
 - **驗收**：準備一份 pcap，把 `<script>` 拆成 3 個亂序封包，仍然要偵測到；送 100 萬條 flow，記憶體要維持在上限內。
+  - ✅ `tests/pcaps/stream_split_ooo.pcap` 偵測到；`test_engine_million_flows_bounded` 送 100 萬條 flow（`--max-flows 4096`、memcap 1 MiB），flow 數與重組記憶體峰值都不超過上限，且確實觸發 memcap 丟棄。
+- **行為說明與已知限制**
+  - 只重組 client → server 方向（目前所有規則都檢查請求端）；回應方向只做 flow 狀態追蹤。
+  - 告警以 flow 為單位去重：同一條 flow 內同一個 sid 只告警一次（重傳、重掃不會重複告警）。
+  - 串流有洞時會等待補齊，直到 flow 結束（逾時、淘汰、關閉）才跳過；被 snaplen 截掉的位元組視為永久遺失，立刻跳過。比對不會跨越洞。
+  - 預設 BPF filter 也涵蓋 VLAN 標籤內的流量，但 libpcap 的 `tcp port N` 看不到 IPv6 擴充標頭後面的 TCP；需要時請用 `-f ''` 關閉 filter。
+  - 不做 IP 片段重組（IPv4/IPv6 的非首片段直接略過），留給 Phase 5 的規避防護。
 
 ### Phase 3 — 應用層與正規化
 - [ ] HTTP parser 和正規化，提供 `http.*` 比對緩衝區
