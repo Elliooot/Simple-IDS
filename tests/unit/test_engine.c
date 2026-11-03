@@ -21,8 +21,11 @@ static void setup_cfg(const engine_config_t *cfg) {
     anomaly_reset();
     output_open(NULL);
     output_set_quiet(1);
-    add_rule("alert tcp any any -> any 80 (content:\"<script>\"; sid:1001; nocase;)");
-    add_rule("alert tcp any any -> any 443 (content:\"malicious.com\"; sid:7001;)");
+    add_rule("alert http any any -> any any (http.uri; content:\"<script>\"; sid:1001; nocase;)");
+    add_rule("alert http any any -> any any (http.request_body; content:\"<script>\"; nocase; sid:1011;)");
+    add_rule("alert tls any any -> any any (tls.sni; content:\"malicious.com\"; sid:7001;)");
+    add_rule("alert dns any any -> any any (dns.query; dotprefix; content:\".evil.com\"; endswith; nocase; sid:8001;)");
+    add_rule("alert tcp any any -> any 21 (content:\"USER root\"; sid:9001;)");
     engine_init(cfg);
     engine_reset_stats();
 }
@@ -83,7 +86,7 @@ static void test_engine_partial_match_is_clean(void) {
 /* B2: content beyond caplen is not inspected. */
 static void test_engine_respects_caplen(void) {
     setup();
-    feed(80, "GET /aaaa HTTP/1.1\r\nX: <script>", 5); /* cuts off "ript>" */
+    feed(80, "GET /?x=<script>", 5); /* cuts off "ript>" */
     engine_shutdown();
     CHECK_EQ_INT(engine_stats()->signature_alerts, 0);
     CHECK_EQ_INT(engine_stats()->truncated_payloads, 1);
@@ -138,11 +141,13 @@ static void test_engine_dedupes_per_flow(void) {
 /* Data after a hole is inspected on its own; no match across the hole. */
 static void test_engine_gap_no_false_match(void) {
     setup();
+    const char *after = "ipt> HTTP/1.1\r\n\r\nGET /<script> HTTP/1.1\r\n\r\n";
     feed_ex(CLIENT_IP, 41300, 80, 1, 0x18, "GET /?x=<scr", 12, 0);
-    feed_ex(CLIENT_IP, 41300, 80, 1 + 15, 0x18, "ipt> <script>", 13, 0);
+    feed_ex(CLIENT_IP, 41300, 80, 1 + 15, 0x18, after, strlen(after), 0);
     CHECK_EQ_INT(engine_stats()->signature_alerts, 0); /* waiting for the hole */
     engine_shutdown();                                  /* flush skips it */
     CHECK_EQ_INT(engine_stats()->signature_alerts, 1);  /* only the real one */
+    CHECK_EQ_INT(engine_stats()->http_requests, 2);     /* cut one + resynced one */
     teardown();
 }
 
@@ -160,9 +165,129 @@ static void test_engine_tls_sni_split(void) {
     CHECK_EQ_INT(engine_stats()->tls_client_hellos, 1);
     CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
 
-    /* The HTTP rule set must not run on 443. */
+    /* HTTP is recognized by content, so it is parsed on 443 too. */
     feed_ex(CLIENT_IP, 41401, 443, 1, 0x18, "GET /<script> HTTP/1.1\r\n\r\n", 26, 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    CHECK_EQ_INT(engine_stats()->http_requests, 1);
+    teardown();
+}
+
+/* A request body split across segments and chunks, and a form post. */
+static void test_engine_http_bodies(void) {
+    setup();
+    const char *hdr = "POST /up HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n";
+    const char *b1 = "5\r\n<scri\r\n", *b2 = "3\r\npt>\r\n0\r\n\r\n";
+    size_t h = strlen(hdr), l1 = strlen(b1);
+    feed_ex(CLIENT_IP, 41500, 80, 0, 0x02, "", 0, 0);
+    feed_ex(CLIENT_IP, 41500, 80, 1, 0x18, hdr, h, 0);
+    feed_ex(CLIENT_IP, 41500, 80, 1 + (uint32_t)(h + l1), 0x18, b2, strlen(b2), 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 0);
+    feed_ex(CLIENT_IP, 41500, 80, 1 + (uint32_t)h, 0x18, b1, l1, 0);
     CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+    CHECK_EQ_INT(engine_stats()->http_bodies, 1);
+
+    /* The next request on the connection is found after the body. */
+    feed_ex(CLIENT_IP, 41500, 80, 1 + (uint32_t)(h + l1 + strlen(b2)), 0x18,
+            "GET / HTTP/1.1\r\n\r\n", 18, 0);
+    CHECK_EQ_INT(engine_stats()->http_requests, 2);
+
+    const char *form = "POST /f HTTP/1.1\r\nContent-Type: application/x-www-form-urlencoded\r\n"
+                       "Content-Length: 16\r\n\r\nq=%3Cscript%3E&z";
+    feed_ex(CLIENT_IP, 41501, 80, 1, 0x18, form, strlen(form), 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    teardown();
+}
+
+/* Normalization anomalies fire once per flow. */
+static void test_engine_norm_anomaly(void) {
+    setup();
+    const char *req = "GET /a/../../etc/passwd HTTP/1.1\r\n\r\n";
+    feed_ex(CLIENT_IP, 41600, 80, 1, 0x18, req, strlen(req), 0);
+    feed_ex(CLIENT_IP, 41600, 80, 1 + (uint32_t)strlen(req), 0x18, req, strlen(req), 0);
+    CHECK_EQ_INT(engine_stats()->http_requests, 2);
+    CHECK_EQ_INT(engine_stats()->anomaly_alerts, 1);
+    teardown();
+}
+
+/* HTTP on an unusual port, and raw rules on a stream with no parser. */
+static void test_engine_any_port(void) {
+    setup();
+    feed_ex(CLIENT_IP, 41700, 8888, 1, 0x18, "GET /<script> HTTP/1.1\r\n\r\n", 26, 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+    feed_ex(CLIENT_IP, 41701, 21, 1, 0x18, "USER ro", 7, 0);
+    feed_ex(CLIENT_IP, 41701, 21, 8, 0x18, "ot\r\n", 4, 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    /* Not HTTP, no raw rule for the port: the stream is dropped at once. */
+    size_t before = stream_stats()->mem_used;
+    feed_ex(CLIENT_IP, 41702, 22, 1, 0x18, "SSH-2.0-x\r\n", 11, 0);
+    CHECK_EQ_INT(stream_stats()->mem_used, before);
+    teardown();
+}
+
+static size_t dns_msg(uint8_t *out, const char *const *labels, int tcp) {
+    size_t n = tcp ? 2 : 0, s = n;
+    memset(out + n, 0, 12);
+    put16(out + n + 4, 1);
+    n += 12;
+    for (int i = 0; labels[i]; i++) {
+        size_t l = strlen(labels[i]);
+        out[n++] = (uint8_t)l;
+        memcpy(out + n, labels[i], l);
+        n += l;
+    }
+    out[n++] = 0;
+    memcpy(out + n, "\x00\x01\x00\x01", 4);
+    n += 4;
+    if (tcp) put16(out, (unsigned)(n - s));
+    return n;
+}
+
+static void feed_udp(uint16_t sport, uint16_t dport, const uint8_t *p, size_t n) {
+    uint8_t frame[1024];
+    size_t fl = build_udp_frame(frame, CLIENT_IP, sport, dport, p, n);
+    uint8_t *buf = exact_bytes(frame, fl);
+    struct timeval ts = { 1700000000, 0 };
+    engine_process_frame(DLT_EN10MB, &ts, buf, fl);
+    free(buf);
+}
+
+static void test_engine_dns(void) {
+    setup();
+    uint8_t msg[512];
+    static const char *const bad[] = { "WWW", "Evil", "com", NULL };
+    static const char *const good[] = { "notevil", "com", NULL };
+    size_t n = dns_msg(msg, bad, 0);
+    feed_udp(5353, 53, msg, n);
+    CHECK_EQ_INT(engine_stats()->dns_queries, 1);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+    n = dns_msg(msg, good, 0);
+    feed_udp(5354, 53, msg, n);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+
+    /* A response (QR set) is not inspected; neither is port 5353. */
+    n = dns_msg(msg, bad, 0);
+    msg[2] |= 0x80;
+    feed_udp(5355, 53, msg, n);
+    msg[2] &= 0x7f;
+    feed_udp(5356, 5353, msg, n);
+    CHECK_EQ_INT(engine_stats()->dns_queries, 2);
+
+    /* Tunneling-like name: one very long label. */
+    char label[60];
+    memset(label, 'a', sizeof(label) - 1);
+    label[sizeof(label) - 1] = '\0';
+    const char *const tunnel[] = { label, "t", "example", NULL };
+    n = dns_msg(msg, tunnel, 0);
+    feed_udp(5357, 53, msg, n);
+    CHECK_EQ_INT(engine_stats()->anomaly_alerts, 1);
+
+    /* DNS over TCP: two length-prefixed queries split across segments. */
+    size_t a = dns_msg(msg, good, 1);
+    size_t b = dns_msg(msg + a, bad, 1);
+    feed_ex(CLIENT_IP, 41800, 53, 1, 0x18, msg, a + 5, 0);
+    feed_ex(CLIENT_IP, 41800, 53, 1 + (uint32_t)(a + 5), 0x18, msg + a + 5, b - 5, 0);
+    CHECK_EQ_INT(engine_stats()->dns_queries, 5);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
     teardown();
 }
 
@@ -233,6 +358,10 @@ const test_case_t engine_tests[] = {
     TEST(test_engine_gap_no_false_match),
     TEST(test_engine_tls_sni_split),
     TEST(test_engine_non_http_on_80),
+    TEST(test_engine_http_bodies),
+    TEST(test_engine_norm_anomaly),
+    TEST(test_engine_any_port),
+    TEST(test_engine_dns),
     TEST(test_engine_counts_decode_failures),
     TEST(test_engine_million_flows_bounded),
     TEST_END

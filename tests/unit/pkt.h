@@ -59,6 +59,26 @@ static inline size_t build_tcp_frame(uint8_t *buf, uint16_t sport, uint16_t dpor
     return build_tcp_frame_ex(buf, 0x0a000002, sport, dport, 0, 0x18, payload, plen);
 }
 
+/* Ethernet + IPv4 (src -> 10.0.0.1) + UDP + payload. */
+static inline size_t build_udp_frame(uint8_t *buf, uint32_t src, uint16_t sport,
+                                     uint16_t dport, const void *payload, size_t plen) {
+    memset(buf, 0, ETH_LEN + IP_LEN + 8);
+    put16(buf + 12, 0x0800);
+    uint8_t *ip = buf + ETH_LEN;
+    ip[0] = 0x45;
+    put16(ip + 2, (unsigned)(IP_LEN + 8 + plen));
+    ip[8] = 64;
+    ip[9] = 17;
+    put32(ip + 12, src);
+    memcpy(ip + 16, "\x0a\x00\x00\x01", 4);
+    uint8_t *udp = ip + IP_LEN;
+    put16(udp, sport);
+    put16(udp + 2, dport);
+    put16(udp + 4, (unsigned)(8 + plen));
+    if (plen) memcpy(udp + 8, payload, plen);
+    return ETH_LEN + IP_LEN + 8 + plen;
+}
+
 #define IP6_LEN 40
 
 /* Ethernet + IPv6 (2001:db8::2 -> ::1) + ext headers + an L4 blob. */

@@ -1,3 +1,7 @@
-# SNI-based HTTPS Attack Detection Rules
-alert tcp any any -> any 443 (content:"malicious.com"; msg:"Malicious domain in SNI"; sid:7001; nocase; priority:1;)
-alert tcp any any -> any 443 (content:"phishing.net"; msg:"Phishing domain in SNI"; sid:7002; nocase; priority:1;)
+# TLS rules: matched against fields of the reassembled ClientHello.
+#   tls.sni     server name (with dotprefix, ".evil.com" + endswith matches
+#               evil.com and every subdomain, but not notevil.com)
+#   tls.alpn    offered protocols joined by ',' (e.g. "h2,http/1.1")
+#   ja3.hash    MD5 of the JA3 string;  ja4.hash  JA4 fingerprint
+alert tls any any -> any any (msg:"Malicious domain in SNI"; tls.sni; dotprefix; content:".malicious.com"; nocase; endswith; sid:7001; priority:1;)
+alert tls any any -> any any (msg:"Phishing domain in SNI"; tls.sni; dotprefix; content:".phishing.net"; nocase; endswith; sid:7002; priority:1;)

@@ -300,8 +300,8 @@ def gen_tls():
     bad = bytearray(client_hello([sni_ext(b"malicious.com")]))
     bad[-len(sni_ext(b"malicious.com")) + 2:-len(sni_ext(b"malicious.com")) + 4] = b"\xff\xff"
     add(44308, bytes(bad))
-    # Not TLS at all on 443.
-    add(44309, b"GET /<script> HTTP/1.1\r\n\r\n")
+    # Not TLS at all on 443: recognized as HTTP by its content (Phase 3).
+    add(44309, b"GET /<script> HTTP/1.1\r\n\r\n", {1001})
     # Large ClientHello (e.g. post-quantum key share) split across TCP
     # segments: the first segment still carries the SNI.
     big = client_hello([sni_ext(b"malicious.com"), tls_ext(51, bytes(1500))])
@@ -332,7 +332,7 @@ def gen_b1_stale_buffer():
     """A big malicious packet followed by a short clean one. libpcap reuses
     its read buffer, so code that runs strstr() past payload_len finds the
     old <script> and blames the second packet."""
-    big = HttpCase("big", "/a", {1001},
+    big = HttpCase("big", "/a", {1012},       # <script> in a header: sid 1012
                    extra_headers="X-Pad: " + "A" * 300 + "<script>\r\n")
     small = b"GET /b HTTP/1.1\r\n\r\n"
     packets = [
@@ -340,7 +340,7 @@ def gen_b1_stale_buffer():
         (T0 + 1, ether(ipv4_tcp("10.0.0.3", SERVER, 46001, 80, small))),
     ]
     emit("b1_stale_buffer", "Matching must stop at payload_len (no NUL terminator)",
-         packets, [alert(1001, 46000)], bugs=["B1"])
+         packets, [alert(1012, 46000)], bugs=["B1"])
 
 
 def gen_b2_truncated():
@@ -488,12 +488,15 @@ def gen_stream_overlap():
 
 def gen_stream_gap():
     """A lost segment: data on both sides is inspected separately, so the
-    pieces around the hole never combine into a false match."""
+    pieces around the hole never combine into a false match. The request
+    cut by the hole is inspected as far as it goes, and the HTTP parser
+    resyncs on the next request line after the hole."""
     tl = Timeline()
     c = Conn(54000)
     seg0 = b"GET /?x=<scr"                              # [0, 12)
     lost = b"XYZ"                                       # [12, 15) never sent
-    seg2 = b"ipt> HTTP/1.1\r\nX: ../\r\n\r\n"            # [15, ...)
+    seg2 = (b"ipt> HTTP/1.1\r\nX: y\r\n\r\n"             # [15, ...)
+            b"GET /?f=../x HTTP/1.1\r\nHost: t\r\n\r\n")
     tl.add(*c.handshake(), c.data(0, seg0), c.data(len(seg0) + len(lost), seg2))
     emit("stream_gap", "No match across a hole; data after it is still inspected",
          tl.packets, [alert(4001, 54000)])

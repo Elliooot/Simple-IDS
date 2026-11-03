@@ -1,0 +1,6 @@
+# DNS rules: dns.query is the queried name in dotted form. dotprefix +
+# endswith match a domain and all of its subdomains, and nothing else.
+alert dns any any -> any any (msg:"DNS query for malicious domain"; dns.query; dotprefix; content:".malicious.com"; nocase; endswith; sid:8001; priority:1;)
+alert dns any any -> any any (msg:"DNS query for phishing domain"; dns.query; dotprefix; content:".phishing.net"; nocase; endswith; sid:8002; priority:1;)
+alert dns any any -> any any (msg:"DNS query for a Tor onion service (leak)"; dns.query; dotprefix; content:".onion"; nocase; endswith; sid:8003; priority:2;)
+alert dns any any -> any any (msg:"DNS query for a dynamic DNS domain"; dns.query; dotprefix; content:".duckdns.org"; nocase; endswith; sid:8004; priority:3;)

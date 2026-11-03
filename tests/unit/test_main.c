@@ -9,7 +9,9 @@ extern const test_case_t bytes_tests[];
 extern const test_case_t rules_tests[];
 extern const test_case_t decode_tests[];
 extern const test_case_t http_tests[];
+extern const test_case_t http_norm_tests[];
 extern const test_case_t tls_tests[];
+extern const test_case_t dns_tests[];
 extern const test_case_t anomaly_tests[];
 extern const test_case_t output_tests[];
 extern const test_case_t flow_tests[];
@@ -24,7 +26,9 @@ static const struct {
     { "rules",   rules_tests },
     { "decode",  decode_tests },
     { "http",    http_tests },
+    { "httpnorm", http_norm_tests },
     { "tls",     tls_tests },
+    { "dns",     dns_tests },
     { "anomaly", anomaly_tests },
     { "output",  output_tests },
     { "flow",    flow_tests },

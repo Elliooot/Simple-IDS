@@ -15,6 +15,40 @@ static rule_t *g_rules = NULL;
 static int g_count = 0;
 static int g_cap = 0;
 
+/* Sticky buffers: keyword and the protocol a rule using it must declare. */
+static const struct {
+    const char *name;
+    const char *proto;
+} BUFFERS[RULE_BUF_COUNT] = {
+    [RULE_BUF_RAW]               = { "raw",               NULL },
+    [RULE_BUF_HTTP_METHOD]       = { "http.method",       "http" },
+    [RULE_BUF_HTTP_URI]          = { "http.uri",          "http" },
+    [RULE_BUF_HTTP_URI_RAW]      = { "http.uri.raw",      "http" },
+    [RULE_BUF_HTTP_HEADER]       = { "http.header",       "http" },
+    [RULE_BUF_HTTP_USER_AGENT]   = { "http.user_agent",   "http" },
+    [RULE_BUF_HTTP_HOST]         = { "http.host",         "http" },
+    [RULE_BUF_HTTP_COOKIE]       = { "http.cookie",       "http" },
+    [RULE_BUF_HTTP_REQUEST_BODY] = { "http.request_body", "http" },
+    [RULE_BUF_TLS_SNI]           = { "tls.sni",           "tls" },
+    [RULE_BUF_TLS_ALPN]          = { "tls.alpn",          "tls" },
+    [RULE_BUF_JA3_HASH]          = { "ja3.hash",          "tls" },
+    [RULE_BUF_JA3_STRING]        = { "ja3.string",        "tls" },
+    [RULE_BUF_JA4_HASH]          = { "ja4.hash",          "tls" },
+    [RULE_BUF_DNS_QUERY]         = { "dns.query",         "dns" },
+};
+
+static const char *const PROTOCOLS[] = { "tcp", "udp", "ip", "http", "tls", "dns", NULL };
+
+const char *rule_buffer_name(rule_buffer_t b) {
+    return (unsigned)b < RULE_BUF_COUNT ? BUFFERS[b].name : "?";
+}
+
+static int find_buffer(const char *kw) {
+    for (int i = 1; i < RULE_BUF_COUNT; i++)
+        if (strcmp(kw, BUFFERS[i].name) == 0) return i;
+    return -1;
+}
+
 /* ------------------------------------------------------------------ */
 /* Parsing helpers. Every copy is bounded by the destination size.     */
 /* ------------------------------------------------------------------ */
@@ -175,7 +209,10 @@ int rule_parse(const char *line, rule_t *out, char *err, size_t errlen) {
         set_err(err, errlen, "unsupported action '%s'", action);
         return -1;
     }
-    if (strcmp(out->protocol, "tcp") != 0 && strcmp(out->protocol, "ip") != 0) {
+    int proto_ok = 0;
+    for (int i = 0; PROTOCOLS[i]; i++)
+        if (strcmp(out->protocol, PROTOCOLS[i]) == 0) proto_ok = 1;
+    if (!proto_ok) {
         set_err(err, errlen, "unsupported protocol '%s'", out->protocol);
         return -1;
     }
@@ -219,7 +256,7 @@ int rule_parse(const char *line, rule_t *out, char *err, size_t errlen) {
 
         char kw[KEYWORD_MAX];
         size_t kn = 0;
-        while ((*p >= 'a' && *p <= 'z') || *p == '_' || *p == '.') {
+        while ((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '_' || *p == '.') {
             if (kn + 1 >= sizeof(kw)) {
                 set_err(err, errlen, "option keyword too long");
                 return -1;
@@ -279,9 +316,42 @@ int rule_parse(const char *line, rule_t *out, char *err, size_t errlen) {
             }
             if (is_sid) { out->sid = (int)v; have_sid = 1; }
             else        { out->priority = (int)v; }
-        } else if (strcmp(kw, "nocase") == 0) {
-            if (has_value) { set_err(err, errlen, "nocase takes no value"); return -1; }
-            out->nocase = 1;
+        } else if (strcmp(kw, "nocase") == 0 || strcmp(kw, "startswith") == 0 ||
+                   strcmp(kw, "endswith") == 0) {
+            if (has_value) { set_err(err, errlen, "%s takes no value", kw); return -1; }
+            if (kw[0] == 'n') out->nocase = 1;
+            else {
+                if (!have_content) {
+                    set_err(err, errlen, "%s must follow a content", kw);
+                    return -1;
+                }
+                if (kw[0] == 's') out->startswith = 1;
+                else out->endswith = 1;
+            }
+        } else if (find_buffer(kw) > 0) {
+            int b = find_buffer(kw);
+            if (has_value) { set_err(err, errlen, "%s takes no value", kw); return -1; }
+            if (have_content) {
+                set_err(err, errlen, "buffer '%s' must come before the content", kw);
+                return -1;
+            }
+            if (out->buffer != RULE_BUF_RAW) {
+                set_err(err, errlen, "only one sticky buffer per rule is supported");
+                return -1;
+            }
+            if (strcmp(out->protocol, BUFFERS[b].proto) != 0) {
+                set_err(err, errlen, "buffer '%s' needs protocol '%s', not '%s'",
+                        kw, BUFFERS[b].proto, out->protocol);
+                return -1;
+            }
+            out->buffer = (rule_buffer_t)b;
+        } else if (strcmp(kw, "dotprefix") == 0) {
+            if (has_value) { set_err(err, errlen, "dotprefix takes no value"); return -1; }
+            if (out->buffer == RULE_BUF_RAW || have_content) {
+                set_err(err, errlen, "dotprefix must follow a buffer keyword, before content");
+                return -1;
+            }
+            out->dotprefix = 1;
         } else if (strcmp(kw, "rev") == 0 || strcmp(kw, "classtype") == 0 ||
                    strcmp(kw, "reference") == 0 || strcmp(kw, "metadata") == 0) {
             char val[256];
@@ -389,16 +459,76 @@ int rules_load_file(const char *path, int *errors) {
     return loaded;
 }
 
-int rules_match(const uint8_t *buf, size_t len, const char *protocol,
+/* Where content occurs in buf under the rule's modifiers, or NULL. */
+static const uint8_t *match_one(const rule_t *r, const uint8_t *buf, size_t len) {
+    const uint8_t *c = r->content;
+    size_t cl = r->content_len;
+    if (cl > len) return NULL;
+    if (r->startswith && r->endswith) {
+        if (cl != len) return NULL;
+        return bytes_find(buf, len, c, cl, r->nocase);
+    }
+    if (r->startswith) return bytes_find(buf, cl, c, cl, r->nocase);
+    if (r->endswith)   return bytes_find(buf + len - cl, cl, c, cl, r->nocase);
+    return bytes_find(buf, len, c, cl, r->nocase);
+}
+
+static int applies(const rule_t *r, int dst_port) {
+    return r->dst_port == 0 || r->dst_port == dst_port;
+}
+
+static int raw_applies(const rule_t *r, const char *l4, const char *app, int dst_port) {
+    if (r->buffer != RULE_BUF_RAW || !applies(r, dst_port)) return 0;
+    return strcmp(r->protocol, "ip") == 0 || strcmp(r->protocol, l4) == 0 ||
+           (app && strcmp(r->protocol, app) == 0);
+}
+
+int rules_match(const uint8_t *buf, size_t len, const char *l4, const char *app,
                 int dst_port, rule_hit_fn hit, void *ctx) {
     int matches = 0;
     for (int i = 0; i < g_count; i++) {
         const rule_t *r = &g_rules[i];
-        if (strcmp(r->protocol, "ip") != 0 && strcmp(r->protocol, protocol) != 0)
-            continue;
-        if (r->dst_port != 0 && r->dst_port != dst_port)
-            continue;
-        const uint8_t *m = bytes_find(buf, len, r->content, r->content_len, r->nocase);
+        if (!raw_applies(r, l4, app, dst_port)) continue;
+        const uint8_t *m = match_one(r, buf, len);
+        if (m) {
+            matches++;
+            if (hit) hit(r, m, ctx);
+        }
+    }
+    return matches;
+}
+
+int rules_any_raw(const char *l4, const char *app, int dst_port) {
+    for (int i = 0; i < g_count; i++)
+        if (raw_applies(&g_rules[i], l4, app, dst_port)) return 1;
+    return 0;
+}
+
+/* dotprefix: names up to this long are matched as "." + name. */
+#define DOTPREFIX_MAX 1024
+
+int rules_match_buffer(rule_buffer_t which, const uint8_t *buf, size_t len,
+                       int dst_port, rule_hit_fn hit, void *ctx) {
+    static uint8_t dotted[DOTPREFIX_MAX + 1];
+    int matches = 0, have_dotted = 0;
+
+    for (int i = 0; i < g_count; i++) {
+        const rule_t *r = &g_rules[i];
+        if (r->buffer != which || !applies(r, dst_port)) continue;
+
+        const uint8_t *m;
+        if (r->dotprefix && len <= DOTPREFIX_MAX) {
+            if (!have_dotted) {
+                dotted[0] = '.';
+                if (len) memcpy(dotted + 1, buf, len);
+                have_dotted = 1;
+            }
+            m = match_one(r, dotted, len + 1);
+            /* Report a position inside the caller's buffer. */
+            if (m) m = m == dotted ? buf : buf + (m - dotted - 1);
+        } else {
+            m = match_one(r, buf, len);
+        }
         if (m) {
             matches++;
             if (hit) hit(r, m, ctx);
@@ -414,7 +544,8 @@ int rules_count(void) {
 size_t rules_max_content_len(void) {
     size_t m = 0;
     for (int i = 0; i < g_count; i++)
-        if (g_rules[i].content_len > m) m = g_rules[i].content_len;
+        if (g_rules[i].buffer == RULE_BUF_RAW && g_rules[i].content_len > m)
+            m = g_rules[i].content_len;
     return m;
 }
 
