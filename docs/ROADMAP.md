@@ -2,6 +2,7 @@
 
 > 狀態：草案 v0.1（2026-11-03）
 > 基準版本：commit `8dbe7c3`（Phase 1 完成）
+> 進度：Phase 1.5 完成（分支 `phase-1.5`，2026-11-03）
 > 用途：作為後續開發（含 Claude Code 雲端 session）的單一依據。每完成一項，就在對應的 checkbox 打勾，並註記 commit。
 
 ---
@@ -28,26 +29,26 @@ SimpleIDS 是以 C + libpcap 撰寫的單執行緒、特徵比對式網路入侵
 以下問題已在 2026-11-02 的審查中，用 AddressSanitizer 和測試 harness 實際重現。
 
 ### 記憶體安全（最優先）
-- [ ] **B1** `main.c:111`：payload 沒有 NUL 結尾，`strncmp`、`strstr`、`strcasestr_custom` 都會讀出界。正常封包就會觸發。
-- [ ] **B2** `main.c:112`：payload 長度用了 `header->len`，應改用 `header->caplen`；IP/TCP header 長度也沒跟 `caplen` 比對。
-- [ ] **B3** `rules.c:58`：`sscanf("%s …")` 沒限制寬度，`action[16]`、`protocol[8]`、`options[256]` 都可能溢位。
+- [x] **B1** `main.c:111`：payload 沒有 NUL 結尾，`strncmp`、`strstr`、`strcasestr_custom` 都會讀出界。正常封包就會觸發。（`f82c1d3`；測試：`b1_stale_buffer`、unit `bytes`/`engine`）
+- [x] **B2** `main.c:112`：payload 長度用了 `header->len`，應改用 `header->caplen`；IP/TCP header 長度也沒跟 `caplen` 比對。（`f82c1d3`；測試：`b2_truncated`、`test_decode_every_prefix`）
+- [x] **B3** `rules.c:58`：`sscanf("%s …")` 沒限制寬度，`action[16]`、`protocol[8]`、`options[256]` 都可能溢位。（`f82c1d3`；測試：`test_parse_overlong_*`）
 
 ### 偵測邏輯
-- [ ] **B4** 規則沒有 `content`，或內容長度 ≥ 256 時，content 為空字串，會比對到所有封包。
-- [ ] **B5** 規則 parser 不處理跳脫字元，所以 sid 4002、4004 這兩條反斜線規則永遠不會觸發。
-- [ ] **B6** 沒檢查 IP 版本和 address family / ethertype，IPv6 會被當成 IPv4 解析，結果完全漏報。
-- [ ] **B7** `match_packet` 不回傳 sid，所以 log 裡的 sid 一律是 0。
-- [ ] **B8** 頻率限制的 IP 表沒有淘汰機制，裝滿 1024 筆之後，新的 IP 就不會再被偵測。
-- [ ] **B9** `rules.c` 的 `tolower(char)` 沒先轉成 `unsigned char`，是未定義行為。
+- [x] **B4** 規則沒有 `content`，或內容長度 ≥ 256 時，content 為空字串，會比對到所有封包。（`f82c1d3`；測試：`test_parse_requires_content`）
+- [x] **B5** 規則 parser 不處理跳脫字元，所以 sid 4002、4004 這兩條反斜線規則永遠不會觸發。（`f82c1d3`；另支援 `|hex|`；測試：`test_parse_escapes`、`http_signatures`）
+- [x] **B6** 沒檢查 IP 版本和 address family / ethertype，IPv6 會被當成 IPv4 解析，結果完全漏報。（`f82c1d3`：非 IPv4 一律計數後略過；真正解碼 IPv6 屬於 Phase 2。測試：`b6_non_ipv4`）
+- [x] **B7** `match_packet` 不回傳 sid，所以 log 裡的 sid 一律是 0。（`f82c1d3`；每條命中規則各寫一筆 alert）
+- [x] **B8** 頻率限制的 IP 表沒有淘汰機制，裝滿 1024 筆之後，新的 IP 就不會再被偵測。（`f82c1d3`：LRU 淘汰；測試：`b8_rate_table_full`）
+- [x] **B9** `rules.c` 的 `tolower(char)` 沒先轉成 `unsigned char`，是未定義行為。（`f82c1d3`；測試：`test_find_nocase_high_bytes`）
 
 ### 輸出與環境
-- [ ] **B10** JSON log 沒跳脫 `msg` 和控制字元，輸出不是合法的 JSON。
-- [ ] **B11** log 路徑 `../logs/ids.log` 是相對於執行時的目錄，開檔失敗也沒處理。
-- [ ] **B12** macOS 的預設介面應該是 `lo0`，不是 `lo`。
-- [ ] **B13** `main.c:93` 把 `packet + 14` 直接 cast 成 `struct ip *`，是未對齊存取（UB），應改用 `memcpy`。
-- [ ] **B14** `anomaly.c:75` printf 錯字，`\n` 位置也放錯。
-- [ ] **B15** repo 追蹤了編譯產物（`SimpleIDS`、`src/SimpleIDS`、`src/sniffer`、`tests/__pycache__`），應移除並加進 `.gitignore`。
-- [ ] **B16** 測試不會驗證結果，應改成讀 JSON log 來判斷是否告警。
+- [x] **B10** JSON log 沒跳脫 `msg` 和控制字元，輸出不是合法的 JSON。（`f82c1d3`；測試：`b10_json_escape`，回歸測試會驗證每一行都是合法 JSON）
+- [x] **B11** log 路徑 `../logs/ids.log` 是相對於執行時的目錄，開檔失敗也沒處理。（`f82c1d3`：`-l` 可設定，預設 `logs/ids.log`，開檔失敗直接結束）
+- [x] **B12** macOS 的預設介面應該是 `lo0`，不是 `lo`。（`f82c1d3`）
+- [x] **B13** `main.c:93` 把 `packet + 14` 直接 cast 成 `struct ip *`，是未對齊存取（UB），應改用 `memcpy`。（`f82c1d3`：改為逐位元組讀取；測試：`test_decode_unaligned_buffer`）
+- [x] **B14** `anomaly.c:75` printf 錯字，`\n` 位置也放錯。（`f82c1d3`：異常改成正式 alert，sid 9000xx）
+- [x] **B15** repo 追蹤了編譯產物（`SimpleIDS`、`src/SimpleIDS`、`src/sniffer`、`tests/__pycache__`），應移除並加進 `.gitignore`。（`a4693b2`；CI hygiene job 會檢查）
+- [x] **B16** 測試不會驗證結果，應改成讀 JSON log 來判斷是否告警。（`c8665a1`：`tests/live/test_live.py`）
 
 **驗收條件**：開啟 `-fsanitize=address,undefined` 後，所有回歸測試都通過；B1–B16 每一項都至少有一個對應的測試案例。
 
@@ -134,12 +135,12 @@ alert http any any -> $HOME_NET any (
 每個 Phase 都要有可以獨立展示的成果，並附上驗收條件。
 
 ### Phase 1.5 — 修正與測試地基
-- [ ] 修完 B1–B16
-- [ ] 支援離線讀檔 `-r file.pcap`（後面所有測試的基礎）
-- [ ] 建立 C 單元測試框架，選一個輕量的，例如 [greatest](https://github.com/silentbicycle/greatest) 或自寫的 assert 巨集
-- [ ] 建立 pcap 回歸測試：`tests/pcaps/*.pcap` 搭配 `*.expected.json`，用 `make test` 比對告警結果
-- [ ] GitHub Actions CI：Ubuntu 和 macOS 兩個平台，跑一般建置和 ASan/UBSan 兩種建置
-- [ ] 調整目錄結構，改成 §8 的規劃
+- [x] 修完 B1–B16（`a4693b2`、`f82c1d3`、`c8665a1`）
+- [x] 支援離線讀檔 `-r file.pcap`（後面所有測試的基礎）（`f82c1d3`）
+- [x] 建立 C 單元測試框架，選一個輕量的，例如 [greatest](https://github.com/silentbicycle/greatest) 或自寫的 assert 巨集（`c8665a1`：自寫，`tests/unit/test.h`）
+- [x] 建立 pcap 回歸測試：`tests/pcaps/*.pcap` 搭配 `*.expected.json`，用 `make test` 比對告警結果（`c8665a1`：`tests/regression/`）
+- [x] GitHub Actions CI：Ubuntu 和 macOS 兩個平台，跑一般建置和 ASan/UBSan 兩種建置（`a2ee01f`）
+- [x] 調整目錄結構，改成 §8 的規劃（`f82c1d3`：現有模組已搬移；`flow/`、`stream/`、`app/dns/`、`tests/fuzz/`、`etc/` 等留給對應的 Phase 建立）
 - **驗收**：`make test` 全部通過，CI 是綠燈。
 
 ### Phase 2 — 解碼與連線追蹤
