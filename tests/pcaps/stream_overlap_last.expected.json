@@ -1,0 +1,22 @@
+{
+  "description": "Overlapping queued segments with --overlap last",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "10.0.0.2",
+      "src_port": 53000,
+      "dest_port": 80
+    },
+    {
+      "sid": 900005,
+      "src_ip": "10.0.0.2",
+      "src_port": 53000,
+      "dest_port": 80
+    }
+  ],
+  "args": [
+    "--overlap",
+    "last"
+  ]
+}

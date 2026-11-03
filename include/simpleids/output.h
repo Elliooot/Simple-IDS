@@ -16,14 +16,20 @@ typedef enum {
 } alert_source_t;
 
 typedef struct {
-    struct timeval ts;          /* packet timestamp                     */
-    const packet_t *pkt;        /* addresses and ports                  */
+    struct timeval ts;          /* packet (or flow end) timestamp       */
+    const char    *src_ip;      /* client side for flow-based alerts    */
+    const char    *dst_ip;
+    uint16_t       src_port;
+    uint16_t       dst_port;
+    uint64_t       flow_id;     /* 0 when not tied to a flow            */
+    const char    *app_proto;   /* "http", "tls" or NULL                */
     int            sid;
     int            priority;
     const char    *msg;
     alert_source_t source;
-    const uint8_t *data;        /* inspected buffer (payload or SNI)    */
+    const uint8_t *data;        /* inspected data (stream bytes or SNI) */
     size_t         data_len;
+    int            truncated;   /* data is incomplete (snaplen / gap)   */
 } alert_event_t;
 
 /*

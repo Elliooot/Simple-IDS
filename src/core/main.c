@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <getopt.h>
 #include <glob.h>
 #include <pcap.h>
 #include <signal.h>
@@ -28,20 +29,52 @@ static void packet_handler(u_char *user, const struct pcap_pkthdr *h, const u_ch
 }
 
 static void usage(const char *prog) {
+    engine_config_t d;
+    engine_config_defaults(&d);
     fprintf(stderr,
-        "Usage: %s [-i IFACE | -r FILE.pcap] [-R RULES]... [-l LOG] [-q] [-v]\n"
+        "Usage: %s [-i IFACE | -r FILE.pcap] [-R RULES]... [-l LOG] [-f FILTER] [-q] [-v]\n"
+        "          [--max-flows N] [--stream-depth SIZE] [--stream-memcap SIZE]\n"
+        "          [--overlap first|last]\n"
         "\n"
         "  -i IFACE   capture live on IFACE (default: %s; needs root)\n"
         "  -r FILE    read packets from a pcap file instead (no root needed)\n"
         "  -R RULES   load a rules file; repeatable (default: %s)\n"
         "  -l LOG     JSON Lines alert log (default: %s)\n"
         "             '-' writes JSON to stdout, 'none' disables the log\n"
+        "  -f FILTER  BPF capture filter (default: '%s', also inside VLAN tags\n"
+        "             on Ethernet); -f '' captures everything\n"
         "  -q         do not print alerts on the console\n"
         "  -v         also print clean HTTP requests / TLS hellos\n"
         "  -h         show this help\n"
         "\n"
+        "  --max-flows N        flow table size; the least recently used flow is\n"
+        "                       evicted when full (default %u)\n"
+        "  --stream-depth SIZE  bytes reassembled per TCP stream (default %uK)\n"
+        "  --stream-memcap SIZE total reassembly memory (default %zuM)\n"
+        "  --overlap POLICY     which bytes win when queued TCP segments overlap:\n"
+        "                       first (default) or last\n"
+        "  SIZE accepts K, M and G suffixes.\n"
+        "\n"
         "A single positional argument is treated as the interface (as before).\n",
-        prog, DEFAULT_IFACE, DEFAULT_RULES_GLOB, OUTPUT_DEFAULT_LOG);
+        prog, DEFAULT_IFACE, DEFAULT_RULES_GLOB, OUTPUT_DEFAULT_LOG, BPF_FILTER,
+        d.flow.max_flows, d.stream.depth / 1024, d.stream.memcap / (1024 * 1024));
+}
+
+/* "64K", "1M", "1048576" -> bytes. Returns 0, or -1 if malformed. */
+static int parse_size(const char *s, unsigned long long max, unsigned long long *out) {
+    char *end;
+    errno = 0;
+    unsigned long long v = strtoull(s, &end, 10);
+    if (errno || end == s) return -1;
+    switch (*end) {
+    case 'k': case 'K': v *= 1024ULL; end++; break;
+    case 'm': case 'M': v *= 1024ULL * 1024; end++; break;
+    case 'g': case 'G': v *= 1024ULL * 1024 * 1024; end++; break;
+    default: break;
+    }
+    if (*end != '\0' || v == 0 || v > max) return -1;
+    *out = v;
+    return 0;
 }
 
 /* Load the given files, or every file matching DEFAULT_RULES_GLOB. */
@@ -99,14 +132,67 @@ static pcap_t *open_capture(const char *iface, const char *file, char *errbuf) {
     return h;
 }
 
+enum { OPT_MAX_FLOWS = 256, OPT_DEPTH, OPT_MEMCAP, OPT_OVERLAP };
+
+static const struct option LONG_OPTS[] = {
+    { "max-flows",     required_argument, NULL, OPT_MAX_FLOWS },
+    { "stream-depth",  required_argument, NULL, OPT_DEPTH },
+    { "stream-memcap", required_argument, NULL, OPT_MEMCAP },
+    { "overlap",       required_argument, NULL, OPT_OVERLAP },
+    { "help",          no_argument,       NULL, 'h' },
+    { NULL, 0, NULL, 0 }
+};
+
+/* The default filter, also matched inside one or two VLAN tags. The
+ * untagged part must come first: each "vlan" shifts later offsets. */
+static void build_filter(char *buf, size_t len, const char *base, int linktype) {
+    if (linktype == DLT_EN10MB)
+        snprintf(buf, len, "(%s) or (vlan and (%s)) or (vlan and (%s))", base, base, base);
+    else
+        snprintf(buf, len, "%s", base);
+}
+
 int main(int argc, char *argv[]) {
-    const char *iface = NULL, *file = NULL;
+    const char *iface = NULL, *file = NULL, *filter = NULL;
     const char *log_path = OUTPUT_DEFAULT_LOG;
     char *rule_files[MAX_RULE_FILES];
     int nrule_files = 0, quiet = 0, verbose = 0, opt;
+    unsigned long long v;
+    engine_config_t cfg;
+    engine_config_defaults(&cfg);
 
-    while ((opt = getopt(argc, argv, "i:r:R:l:qvh")) != -1) {
+    while ((opt = getopt_long(argc, argv, "i:r:R:l:f:qvh", LONG_OPTS, NULL)) != -1) {
         switch (opt) {
+        case 'f': filter = optarg; break;
+        case OPT_MAX_FLOWS:
+            if (parse_size(optarg, 50000000ULL, &v) < 0) {
+                fprintf(stderr, "Bad --max-flows '%s'\n", optarg);
+                return 1;
+            }
+            cfg.flow.max_flows = (uint32_t)v;
+            break;
+        case OPT_DEPTH:
+            if (parse_size(optarg, 1ULL << 30, &v) < 0) {
+                fprintf(stderr, "Bad --stream-depth '%s' (max 1G)\n", optarg);
+                return 1;
+            }
+            cfg.stream.depth = (uint32_t)v;
+            break;
+        case OPT_MEMCAP:
+            if (parse_size(optarg, (unsigned long long)SIZE_MAX, &v) < 0) {
+                fprintf(stderr, "Bad --stream-memcap '%s'\n", optarg);
+                return 1;
+            }
+            cfg.stream.memcap = (size_t)v;
+            break;
+        case OPT_OVERLAP:
+            if (strcmp(optarg, "first") == 0) cfg.stream.policy = OVERLAP_FIRST;
+            else if (strcmp(optarg, "last") == 0) cfg.stream.policy = OVERLAP_LAST;
+            else {
+                fprintf(stderr, "Bad --overlap '%s' (first or last)\n", optarg);
+                return 1;
+            }
+            break;
         case 'i': iface = optarg; break;
         case 'r': file = optarg; break;
         case 'R':
@@ -156,21 +242,40 @@ int main(int argc, char *argv[]) {
     int linktype = pcap_datalink(g_handle);
     const char *ltname = pcap_datalink_val_to_name(linktype);
 
-    struct bpf_program fp;
-    if (pcap_compile(g_handle, &fp, BPF_FILTER, 1, PCAP_NETMASK_UNKNOWN) < 0 ||
-        pcap_setfilter(g_handle, &fp) < 0) {
-        fprintf(stderr, "Cannot install filter '%s': %s\n", BPF_FILTER, pcap_geterr(g_handle));
+    char fexpr[512];
+    if (filter) snprintf(fexpr, sizeof(fexpr), "%s", filter);
+    else build_filter(fexpr, sizeof(fexpr), BPF_FILTER, linktype);
+
+    if (fexpr[0]) {
+        struct bpf_program fp;
+        if (pcap_compile(g_handle, &fp, fexpr, 1, PCAP_NETMASK_UNKNOWN) < 0 ||
+            pcap_setfilter(g_handle, &fp) < 0) {
+            fprintf(stderr, "Cannot install filter '%s': %s\n", fexpr, pcap_geterr(g_handle));
+            pcap_close(g_handle);
+            rules_free();
+            output_close();
+            return 2;
+        }
+        pcap_freecode(&fp);
+    }
+
+    if (engine_init(&cfg) < 0) {
         pcap_close(g_handle);
         rules_free();
         output_close();
-        return 2;
+        return 1;
     }
-    pcap_freecode(&fp);
 
     fprintf(con, "%s %s (link type %s), %d rules, log: %s\n",
             file ? "Reading" : "Listening on", file ? file : iface,
             ltname ? ltname : "?", rules_count(),
             log_path ? log_path : "(none)");
+    fprintf(con, "Memory budget: flow table %.1f MiB (%u flows) + reassembly %.1f MiB "
+                 "(depth %u bytes/stream, overlap policy: %s)\n",
+            (double)flow_table_memory() / 1048576.0, cfg.flow.max_flows,
+            (double)cfg.stream.memcap / 1048576.0, cfg.stream.depth,
+            cfg.stream.policy == OVERLAP_LAST ? "last" : "first");
+    fflush(con);
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -185,6 +290,7 @@ int main(int argc, char *argv[]) {
         status = 2;
     }
 
+    engine_shutdown(); /* inspects whatever the open flows still buffer */
     engine_print_stats(con);
 
     pcap_close(g_handle);

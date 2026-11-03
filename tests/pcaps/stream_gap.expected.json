@@ -1,0 +1,12 @@
+{
+  "description": "No match across a hole; data after it is still inspected",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 4001,
+      "src_ip": "10.0.0.2",
+      "src_port": 54000,
+      "dest_port": 80
+    }
+  ]
+}

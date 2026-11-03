@@ -1,0 +1,22 @@
+{
+  "description": "IPv6 with reassembly, extension headers and fragments",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 1001,
+      "src_ip": "2001:db8::2",
+      "src_port": 56000,
+      "dest_port": 80
+    },
+    {
+      "sid": 1001,
+      "src_ip": "2001:db8::2",
+      "src_port": 56001,
+      "dest_port": 80
+    }
+  ],
+  "args": [
+    "-f",
+    ""
+  ]
+}

@@ -17,12 +17,18 @@ static inline void put16(uint8_t *p, unsigned v) {
     p[1] = (uint8_t)v;
 }
 
+static inline void put32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
+
 /*
- * Write Ethernet + IPv4 (10.0.0.2 -> 10.0.0.1) + TCP + payload into buf.
- * Returns the frame length. buf must hold HDRS_LEN + plen bytes.
+ * Ethernet + IPv4 (src -> 10.0.0.1) + TCP + payload, with a given source
+ * address (host order), sequence number and flags. Returns the length.
  */
-static inline size_t build_tcp_frame(uint8_t *buf, uint16_t sport, uint16_t dport,
-                                     const void *payload, size_t plen) {
+static inline size_t build_tcp_frame_ex(uint8_t *buf, uint32_t src, uint16_t sport,
+                                        uint16_t dport, uint32_t seq, uint8_t flags,
+                                        const void *payload, size_t plen) {
     memset(buf, 0, HDRS_LEN);
     /* Ethernet */
     memcpy(buf, "\x02\x00\x00\x00\x00\x01\x02\x00\x00\x00\x00\x02", 12);
@@ -34,16 +40,42 @@ static inline size_t build_tcp_frame(uint8_t *buf, uint16_t sport, uint16_t dpor
     put16(ip + 6, 0x4000); /* DF */
     ip[8] = 64;
     ip[9] = 6;
-    memcpy(ip + 12, "\x0a\x00\x00\x02", 4);
+    put32(ip + 12, src);
     memcpy(ip + 16, "\x0a\x00\x00\x01", 4);
     /* TCP */
     uint8_t *tcp = ip + IP_LEN;
     put16(tcp, sport);
     put16(tcp + 2, dport);
+    put32(tcp + 4, seq);
     tcp[12] = 5 << 4;
-    tcp[13] = 0x18;
-    memcpy(buf + HDRS_LEN, payload, plen);
+    tcp[13] = flags;
+    if (plen) memcpy(buf + HDRS_LEN, payload, plen);
     return HDRS_LEN + plen;
+}
+
+/* 10.0.0.2 -> 10.0.0.1, seq 0, PSH|ACK. buf must hold HDRS_LEN + plen. */
+static inline size_t build_tcp_frame(uint8_t *buf, uint16_t sport, uint16_t dport,
+                                     const void *payload, size_t plen) {
+    return build_tcp_frame_ex(buf, 0x0a000002, sport, dport, 0, 0x18, payload, plen);
+}
+
+#define IP6_LEN 40
+
+/* Ethernet + IPv6 (2001:db8::2 -> ::1) + ext headers + an L4 blob. */
+static inline size_t build_ipv6_frame(uint8_t *buf, uint8_t next, const void *ext,
+                                      size_t elen, const void *l4, size_t l4len) {
+    memset(buf, 0, ETH_LEN + IP6_LEN);
+    put16(buf + 12, 0x86dd);
+    uint8_t *ip = buf + ETH_LEN;
+    ip[0] = 0x60;
+    put16(ip + 4, (unsigned)(elen + l4len));
+    ip[6] = next;
+    ip[7] = 64;
+    memcpy(ip + 8, "\x20\x01\x0d\xb8\0\0\0\0\0\0\0\0\0\0\0\x02", 16);
+    memcpy(ip + 24, "\x20\x01\x0d\xb8\0\0\0\0\0\0\0\0\0\0\0\x01", 16);
+    if (elen) memcpy(ip + IP6_LEN, ext, elen);
+    memcpy(ip + IP6_LEN + elen, l4, l4len);
+    return ETH_LEN + IP6_LEN + elen + l4len;
 }
 
 /* Append a TLS extension; returns new length. */
