@@ -225,6 +225,8 @@ static void inspect_body(flow_t *f, const struct timeval *ts, const uint8_t *dat
     g_stats.http_bodies++;
     if (f->app.body_form) {
         unsigned flags = 0;
+        /* Form parameters are polluted the same way as query ones. */
+        http_check_params(data, len, &flags);
         size_t n = http_decode_form(data, len, g_body_norm, sizeof(g_body_norm), &flags);
         norm_events(f, ts, flags & ~(unsigned)HTTP_NORM_TRUNCATED, data, len, truncated);
         data = g_body_norm;

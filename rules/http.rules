@@ -37,6 +37,7 @@ alert http any any -> any any (msg:"Path Traversal: Directory climbing"; http.ur
 alert http any any -> any any (msg:"Path Traversal: Windows style"; http.uri; content:"..\\"; sid:4002; priority:2;)
 alert http any any -> any any (msg:"Path Traversal: Unix passwd file access"; http.uri; content:"/etc/passwd"; sid:4003; priority:1;)
 alert http any any -> any any (msg:"Path Traversal: Windows System32 access"; http.uri; content:"C:\\Windows\\System32"; nocase; sid:4004; priority:1;)
+alert http any any -> any any (msg:"Path Traversal: Windows System32 access (normalized path)"; http.uri; content:"/Windows/System32/"; nocase; sid:4005; priority:1;)
 
 # Scanner/Tool Detection
 alert http any any -> any any (msg:"Attack Tool: SQLMap detected"; http.user_agent; content:"sqlmap"; nocase; sid:5001; priority:1;)

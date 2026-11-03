@@ -1,0 +1,30 @@
+{
+  "description": "Request bodies: Content-Length, chunked, form decoding, keep-alive",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 1011,
+      "src_ip": "10.0.0.2",
+      "src_port": 58000,
+      "dest_port": 80
+    },
+    {
+      "sid": 2012,
+      "src_ip": "10.0.0.2",
+      "src_port": 58001,
+      "dest_port": 80
+    },
+    {
+      "sid": 2011,
+      "src_ip": "10.0.0.2",
+      "src_port": 58002,
+      "dest_port": 80
+    },
+    {
+      "sid": 3011,
+      "src_ip": "10.0.0.2",
+      "src_port": 58003,
+      "dest_port": 80
+    }
+  ]
+}
