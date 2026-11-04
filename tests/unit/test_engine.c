@@ -5,20 +5,39 @@
 #include "simpleids/engine.h"
 #include "simpleids/output.h"
 #include "simpleids/rules.h"
+#include "simpleids/threshold.h"
 #include "test.h"
 
 #define CLIENT_IP 0x0a000002u
 
+static ruleset_t *g_rs;
+
 static void add_rule(const char *line) {
     rule_t r;
-    char err[128];
-    if (rule_parse(line, &r, err, sizeof(err)) == 1) rules_add(&r);
+    char err[200];
+    if (rule_parse(g_rs, line, &r, err, sizeof(err)) != 1) {
+        fprintf(stderr, "    bad test rule: %s\n", err);
+        abort();
+    }
+    if (ruleset_add(g_rs, &r) < 0) abort();
+}
+
+/* Start a new active ruleset; finish it with use_rules(). */
+static void new_rules(void) {
+    ruleset_free(rules_set_active(NULL));
+    g_rs = ruleset_new();
+}
+
+static void use_rules(void) {
+    if (ruleset_compile(g_rs) < 0) abort();
+    rules_set_active(g_rs);
 }
 
 static void setup_cfg(const engine_config_t *cfg) {
     engine_shutdown();
-    rules_free();
+    threshold_free();
     anomaly_reset();
+    new_rules();
     output_open(NULL);
     output_set_quiet(1);
     add_rule("alert http any any -> any any (http.uri; content:\"<script>\"; sid:1001; nocase;)");
@@ -26,6 +45,7 @@ static void setup_cfg(const engine_config_t *cfg) {
     add_rule("alert tls any any -> any any (tls.sni; content:\"malicious.com\"; sid:7001;)");
     add_rule("alert dns any any -> any any (dns.query; dotprefix; content:\".evil.com\"; endswith; nocase; sid:8001;)");
     add_rule("alert tcp any any -> any 21 (content:\"USER root\"; sid:9001;)");
+    use_rules();
     engine_init(cfg);
     engine_reset_stats();
 }
@@ -38,7 +58,8 @@ static void setup(void) {
 
 static void teardown(void) {
     engine_shutdown();
-    rules_free();
+    ruleset_free(rules_set_active(NULL));
+    threshold_free();
     anomaly_reset();
     output_close();
     output_set_quiet(0);
@@ -126,14 +147,16 @@ static void test_engine_seq_wraparound(void) {
     teardown();
 }
 
-/* The same match seen again (retransmission, rescan) alerts once. */
+/* A retransmitted request alerts once; a second request on the same
+ * connection is a new transaction and alerts again. */
 static void test_engine_dedupes_per_flow(void) {
     setup();
     const char *req = "GET /?x=<script> HTTP/1.1\r\n\r\n";
     feed_ex(CLIENT_IP, 41200, 80, 1, 0x18, req, strlen(req), 0);
     feed_ex(CLIENT_IP, 41200, 80, 1, 0x18, req, strlen(req), 0);
-    feed_ex(CLIENT_IP, 41200, 80, 1 + (uint32_t)strlen(req), 0x18, req, strlen(req), 0);
     CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+    feed_ex(CLIENT_IP, 41200, 80, 1 + (uint32_t)strlen(req), 0x18, req, strlen(req), 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
     CHECK_EQ_INT(engine_stats()->http_requests, 2);
     teardown();
 }
@@ -291,6 +314,97 @@ static void test_engine_dns(void) {
     teardown();
 }
 
+static void post(uint32_t src, uint16_t sport, const char *uri, const char *body) {
+    char req[512];
+    int n = snprintf(req, sizeof(req), "POST %s HTTP/1.1\r\nHost: x\r\n"
+                     "Content-Length: %zu\r\n\r\n%s", uri, strlen(body), body);
+    feed_ex(src, sport, 80, 1, 0x18, req, (size_t)n, 0);
+}
+
+/* A rule over the method, the URI and the body, behind a detection_filter:
+ * the brute force alerts only once the third login from one source comes. */
+static void test_engine_detection_filter(void) {
+    setup();
+    new_rules();
+    add_rule("alert http any any -> any any (msg:\"login brute force\"; "
+             "http.method; content:\"POST\"; http.uri; content:\"/login\"; "
+             "http.request_body; content:\"user=\"; "
+             "detection_filter:track by_src, count 2, seconds 60; sid:5;)");
+    use_rules();
+    post(CLIENT_IP, 42000, "/login", "user=a&pw=1");
+    post(CLIENT_IP, 42001, "/login", "user=a&pw=2");
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 0);
+    CHECK_EQ_INT(engine_stats()->thresholded, 2);
+    post(CLIENT_IP + 1, 42002, "/login", "user=a&pw=3");     /* other source */
+    post(CLIENT_IP, 42003, "/other", "user=a&pw=3");         /* uri differs */
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 0);
+    post(CLIENT_IP, 42004, "/login", "user=a&pw=4");
+    post(CLIENT_IP, 42005, "/login", "user=a&pw=5");
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    teardown();
+}
+
+/* limit: a noisy rule alerts at most N times per window. */
+static void test_engine_threshold_limit(void) {
+    setup();
+    new_rules();
+    add_rule("alert http any any -> any any (http.uri; content:\"/scan\"; "
+             "threshold:type limit, track by_rule, count 1, seconds 60; sid:6;)");
+    use_rules();
+    for (uint16_t i = 0; i < 5; i++)
+        feed_ex(CLIENT_IP + i, (uint16_t)(42100 + i), 80, 1, 0x18,
+                "GET /scan HTTP/1.1\r\n\r\n", 22, 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+    CHECK_EQ_INT(engine_stats()->thresholded, 4);
+    teardown();
+}
+
+/* pass: a trusted source's flow is not inspected by any rule afterwards. */
+static void test_engine_pass_rule(void) {
+    setup();
+    new_rules();
+    add_rule("alert http any any -> any any (http.uri; content:\"/admin\"; sid:1;)");
+    add_rule("alert http any any -> any any (http.uri; content:\"<script>\"; sid:2;)");
+    add_rule("pass http 10.0.0.2 any -> any any (http.uri; content:\"/admin\"; sid:3;)");
+    use_rules();
+    const char *a = "GET /admin HTTP/1.1\r\n\r\n", *b = "GET /<script> HTTP/1.1\r\n\r\n";
+    feed_ex(CLIENT_IP, 42200, 80, 1, 0x18, a, strlen(a), 0);
+    feed_ex(CLIENT_IP, 42200, 80, 1 + (uint32_t)strlen(a), 0x18, b, strlen(b), 0);
+    CHECK_EQ_INT(engine_stats()->http_requests, 2);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 0);
+    CHECK_EQ_INT(engine_stats()->passed_flows, 1);
+    /* The same requests from elsewhere alert as usual. */
+    feed_ex(CLIENT_IP + 1, 42201, 80, 1, 0x18, a, strlen(a), 0);
+    feed_ex(CLIENT_IP + 1, 42201, 80, 1 + (uint32_t)strlen(a), 0x18, b, strlen(b), 0);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    /* Anomalies are not rules: a passed flow still reports them. */
+    const char *t = "GET /admin/../../etc/passwd HTTP/1.1\r\n\r\n";
+    feed_ex(CLIENT_IP, 42202, 80, 1, 0x18, t, strlen(t), 0);
+    CHECK_EQ_INT(engine_stats()->anomaly_alerts, 1);
+    teardown();
+}
+
+/* Raw UDP rules look at each client datagram once (every datagram is its
+ * own message, so a repeat alerts again); pcre and relative matching work
+ * on raw payloads too. */
+static void test_engine_udp_raw(void) {
+    setup();
+    new_rules();
+    add_rule("alert udp any any -> any 9999 (content:\"PING\"; "
+             "pcre:\"/^\\s*[0-9]{4}/R\"; sid:7;)");
+    use_rules();
+    feed_udp(5000, 9999, (const uint8_t *)"xxPING 1234", 11);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 1);
+    feed_udp(5000, 9999, (const uint8_t *)"xxPING 1234", 11);  /* next datagram */
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    feed_udp(5001, 9999, (const uint8_t *)"xxPING abcd", 11);
+    feed_udp(5002, 9998, (const uint8_t *)"xxPING 1234", 11);  /* other port */
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 2);
+    feed_udp(5003, 9999, (const uint8_t *)"PING\t9876", 9);
+    CHECK_EQ_INT(engine_stats()->signature_alerts, 3);
+    teardown();
+}
+
 /* Non-HTTP data on port 80 is dropped from inspection right away. */
 static void test_engine_non_http_on_80(void) {
     setup();
@@ -362,6 +476,10 @@ const test_case_t engine_tests[] = {
     TEST(test_engine_norm_anomaly),
     TEST(test_engine_any_port),
     TEST(test_engine_dns),
+    TEST(test_engine_detection_filter),
+    TEST(test_engine_threshold_limit),
+    TEST(test_engine_pass_rule),
+    TEST(test_engine_udp_raw),
     TEST(test_engine_counts_decode_failures),
     TEST(test_engine_million_flows_bounded),
     TEST_END

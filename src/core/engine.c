@@ -8,6 +8,7 @@
 #include "simpleids/http.h"
 #include "simpleids/output.h"
 #include "simpleids/rules.h"
+#include "simpleids/threshold.h"
 #include "simpleids/tls.h"
 
 #define HTTP_MAX_HEADER  16384 /* give up waiting for CRLFCRLF after this */
@@ -29,6 +30,7 @@ const engine_stats_t *engine_stats(void) {
 void engine_reset_stats(void) {
     memset(&g_stats, 0, sizeof(g_stats));
     stream_reset_stats();
+    rules_reset_stats();
 }
 
 /* ------------------------------------------------------------------ */
@@ -58,8 +60,8 @@ static unsigned long alert_total(void) {
     return g_stats.signature_alerts + g_stats.anomaly_alerts;
 }
 
-static void flow_alert(const flow_t *f, const struct timeval *ts, int sid, int priority,
-                       const char *msg, alert_source_t source,
+static void flow_alert(const flow_t *f, const struct timeval *ts, const rule_t *rule,
+                       int sid, int priority, const char *msg, alert_source_t source,
                        const uint8_t *data, size_t len, int truncated) {
     flow_names_t n;
     flow_names(f, &n);
@@ -68,7 +70,11 @@ static void flow_alert(const flow_t *f, const struct timeval *ts, int sid, int p
         .src_ip = n.ip[0], .dst_ip = n.ip[1],
         .src_port = f->port[0], .dst_port = f->port[1],
         .flow_id = f->id, .app_proto = app_name_of((app_proto_t)f->app.proto),
+        .proto = f->l4proto == L4_UDP ? "UDP" : "TCP",
         .sid = sid, .priority = priority, .msg = msg, .source = source,
+        .rev = rule ? rule->rev : 0,
+        .category = rule && rule->classtype[0] ? rule->classtype : NULL,
+        .action = rule ? rule_action_name((rule_action_t)rule->action) : NULL,
         .data = data, .data_len = len, .truncated = truncated,
     };
     if (source == ALERT_SOURCE_ANOMALY) g_stats.anomaly_alerts++;
@@ -76,8 +82,9 @@ static void flow_alert(const flow_t *f, const struct timeval *ts, int sid, int p
     output_alert(&ev);
 }
 
-/* Signature alerts fire once per flow and sid. Rescanning overlapping
- * windows of a stream would otherwise report the same match again. */
+/* Once per flow and sid: used for anomalies and for raw stream rules,
+ * where rescanning overlapping windows would report one match again.
+ * Rules on parsed messages fire once per message instead. */
 static int already_alerted(flow_t *f, int sid) {
     for (int i = 0; i < f->app.nsids; i++)
         if (f->app.sids[i] == sid) return 1;
@@ -88,25 +95,53 @@ static int already_alerted(flow_t *f, int sid) {
 typedef struct {
     flow_t *f;
     const struct timeval *ts;
-    const uint8_t *data;      /* what to log: start of data         */
-    const uint8_t *data_end;  /* end of the inspected data          */
+    const uint8_t *data;      /* anomalies: what to log             */
+    const uint8_t *data_end;
     int truncated;
+    const rule_input_t *in;   /* signatures: the inspected buffers  */
+    int once_per_flow;        /* raw stream rules                   */
+    int *msg_sids;            /* once per message (DNS questions)   */
+    int *nmsg_sids;
 } hit_ctx_t;
 
-static void on_rule_hit(const rule_t *r, const uint8_t *match, void *vctx) {
+#define MSG_SIDS_MAX 32
+
+/* Already alerted for this message? Records sid otherwise. */
+static int seen_in_message(hit_ctx_t *c, int sid) {
+    if (!c->msg_sids) return 0;
+    for (int i = 0; i < *c->nmsg_sids; i++)
+        if (c->msg_sids[i] == sid) return 1;
+    if (*c->nmsg_sids < MSG_SIDS_MAX) c->msg_sids[(*c->nmsg_sids)++] = sid;
+    return 0;
+}
+
+static void on_rule_hit(const rule_t *r, rule_buffer_t b, size_t off, void *vctx) {
     hit_ctx_t *c = vctx;
-    if (already_alerted(c->f, r->sid)) {
+    flow_t *f = c->f;
+    if (r->action == RULE_ACTION_PASS) {
+        if (!f->app.passed) g_stats.passed_flows++;
+        f->app.passed = 1;
+        return;
+    }
+    if ((c->once_per_flow && already_alerted(f, r->sid)) || seen_in_message(c, r->sid)) {
         g_stats.duplicate_alerts++;
         return;
     }
-    const uint8_t *from = match - c->data > ALERT_CONTEXT ? match - ALERT_CONTEXT : c->data;
-    flow_alert(c->f, c->ts, r->sid, r->priority, r->msg, ALERT_SOURCE_SIGNATURE,
-               from, (size_t)(c->data_end - from), c->truncated);
+    if (!threshold_check(r->sid, &r->threshold, f->addr[0], f->addr[1], c->ts->tv_sec)) {
+        g_stats.thresholded++;
+        return;
+    }
+    const uint8_t *buf = c->in->buf[b];
+    size_t len = c->in->len[b];
+    size_t from = off > ALERT_CONTEXT ? off - ALERT_CONTEXT : 0;
+    if (from > len) from = len;
+    flow_alert(f, c->ts, r, r->sid, r->priority, r->msg, ALERT_SOURCE_SIGNATURE,
+               buf + from, len - from, c->truncated);
 }
 
 static void on_anomaly_hit(const anomaly_hit_t *h, void *vctx) {
     hit_ctx_t *c = vctx;
-    flow_alert(c->f, c->ts, h->sid, h->priority, h->msg, ALERT_SOURCE_ANOMALY,
+    flow_alert(c->f, c->ts, NULL, h->sid, h->priority, h->msg, ALERT_SOURCE_ANOMALY,
                c->data, (size_t)(c->data_end - c->data), c->truncated);
 }
 
@@ -117,33 +152,83 @@ static void flow_anomaly(flow_t *f, const struct timeval *ts, int sid, int prior
         g_stats.duplicate_alerts++;
         return;
     }
-    flow_alert(f, ts, sid, priority, msg, ALERT_SOURCE_ANOMALY, data, len, truncated);
+    flow_alert(f, ts, NULL, sid, priority, msg, ALERT_SOURCE_ANOMALY, data, len, truncated);
 }
 
-/* Run the rules of one sticky buffer. */
-static void match_buffer(flow_t *f, const struct timeval *ts, rule_buffer_t b,
-                         const void *data, size_t len, int truncated) {
-    const uint8_t *p = data ? data : (const uint8_t *)"";
-    hit_ctx_t ctx = { f, ts, p, p + len, truncated };
-    rules_match_buffer(b, p, len, f->port[1], on_rule_hit, &ctx);
+/* ------------------------------------------------------------------ */
+/* Rule inputs                                                         */
+/* ------------------------------------------------------------------ */
+
+static uint8_t rule_app(app_proto_t p) {
+    switch (p) {
+    case APP_HTTP: return RULE_PROTO_HTTP;
+    case APP_TLS:  return RULE_PROTO_TLS;
+    case APP_DNS:  return RULE_PROTO_DNS;
+    default:       return RULE_PROTO_IP;
+    }
+}
+
+/*
+ * flow:established. TCP: every data-carrying state except a bare SYN
+ * (a stream picked up mid-way counts, as in Suricata's midstream mode).
+ * UDP: the server has answered at least once.
+ */
+static int flow_established(const flow_t *f) {
+    if (f->l4proto == L4_UDP) return f->pkts[FLOW_TO_CLIENT] > 0;
+    return f->tcp_state != TCP_STATE_SYN_SENT;
+}
+
+static void input_init(rule_input_t *in, const flow_t *f) {
+    memset(in, 0, sizeof(*in));
+    in->l4 = f->l4proto == L4_UDP ? RULE_PROTO_UDP : RULE_PROTO_TCP;
+    in->app = rule_app((app_proto_t)f->app.proto);
+    in->established = (uint8_t)flow_established(f);
+    in->src = f->addr[0];
+    in->dst = f->addr[1];
+    in->ip_version = f->ip_version;
+    in->sport = f->port[0];
+    in->dport = f->port[1];
+}
+
+static void input_set(rule_input_t *in, rule_buffer_t b, const void *data, size_t len) {
+    in->buf[b] = data ? data : (const uint8_t *)"";
+    in->len[b] = len;
+}
+
+/* Evaluate one phase for a flow (nothing once a pass rule matched). */
+static void eval_phase_ex(flow_t *f, const struct timeval *ts, rule_phase_t phase,
+                          const rule_input_t *in, int truncated, int once_per_flow,
+                          int *msg_sids, int *nmsg_sids) {
+    if (f->app.passed) return;
+    hit_ctx_t ctx = { f, ts, NULL, NULL, truncated, in, once_per_flow, msg_sids, nmsg_sids };
+    rules_eval(rules_active(), phase, in, on_rule_hit, &ctx);
+}
+
+static void eval_phase(flow_t *f, const struct timeval *ts, rule_phase_t phase,
+                       const rule_input_t *in, int truncated, int once_per_flow) {
+    eval_phase_ex(f, ts, phase, in, truncated, once_per_flow, NULL, NULL);
 }
 
 /* ------------------------------------------------------------------ */
 /* Raw-content rules over the reassembled stream                       */
 /* ------------------------------------------------------------------ */
 
-/* Rescan the last (longest content - 1) bytes so that matches across
- * segment boundaries are found, but never across a gap. */
+/* Rescan enough of the already-scanned data that a match crossing a
+ * segment boundary is found (the longest raw content minus one, or the
+ * whole region for multi-condition rules), but never across a gap. */
 static void raw_scan(flow_t *f, const struct timeval *ts, uint32_t end) {
     flow_app_t *a = &f->app;
     stream_t *s = &f->stream;
-    size_t back = rules_max_content_len();
-    uint32_t from = a->scan_pos > back ? a->scan_pos - (uint32_t)(back ? back - 1 : 0) : 0;
+    size_t back = rules_raw_span(rules_active());
+    uint32_t from = a->seg_start;
+    if (back != SIZE_MAX && a->scan_pos > back)
+        from = a->scan_pos - (uint32_t)(back ? back - 1 : 0);
     if (from < a->seg_start) from = a->seg_start;
     if (end > from) {
-        hit_ctx_t ctx = { f, ts, s->buf + from, s->buf + end, 0 };
-        rules_match(s->buf + from, end - from, "tcp", app_name_of((app_proto_t)a->proto),
-                    f->port[1], on_rule_hit, &ctx);
+        rule_input_t in;
+        input_init(&in, f);
+        input_set(&in, RULE_BUF_RAW, s->buf + from, end - from);
+        eval_phase(f, ts, RULE_PHASE_TCP_STREAM, &in, 0, 1);
     }
     a->scan_pos = end;
 }
@@ -182,6 +267,19 @@ static void norm_events(flow_t *f, const struct timeval *ts, unsigned flags,
             flow_anomaly(f, ts, NORM_EVENTS[i].sid, 2, NORM_EVENTS[i].msg, data, len, truncated);
 }
 
+/* Rule input with every buffer of the request in g_tx. */
+static void http_input(rule_input_t *in, const flow_t *f) {
+    input_init(in, f);
+    input_set(in, RULE_BUF_HTTP_METHOD, g_tx.method, g_tx.method_len);
+    input_set(in, RULE_BUF_HTTP_URI_RAW, g_tx.uri_raw, g_tx.uri_raw_len);
+    input_set(in, RULE_BUF_HTTP_URI, g_tx.uri, g_tx.uri_len);
+    input_set(in, RULE_BUF_HTTP_HEADER, g_tx.header, g_tx.header_len);
+    if (g_tx.has_user_agent)
+        input_set(in, RULE_BUF_HTTP_USER_AGENT, g_tx.user_agent, g_tx.user_agent_len);
+    if (g_tx.host_len) input_set(in, RULE_BUF_HTTP_HOST, g_tx.host, g_tx.host_len);
+    if (g_tx.has_cookie) input_set(in, RULE_BUF_HTTP_COOKIE, g_tx.cookie, g_tx.cookie_len);
+}
+
 /* Inspect one request header block; leaves the parsed request in g_tx. */
 static int on_http_request(flow_t *f, const struct timeval *ts,
                            uint32_t start, uint32_t end, int truncated) {
@@ -194,21 +292,13 @@ static int on_http_request(flow_t *f, const struct timeval *ts,
     g_stats.http_requests++;
     flow_names(f, &n);
 
-    hit_ctx_t ctx = { f, ts, req, req + len, truncated };
+    hit_ctx_t ctx = { f, ts, req, req + len, truncated, NULL, 0, NULL, NULL };
     anomaly_check(n.ip[0], ts->tv_sec, req, len, on_anomaly_hit, &ctx);
     norm_events(f, ts, g_tx.norm_flags, g_tx.uri_raw, g_tx.uri_raw_len, truncated);
 
-    match_buffer(f, ts, RULE_BUF_HTTP_METHOD, g_tx.method, g_tx.method_len, truncated);
-    match_buffer(f, ts, RULE_BUF_HTTP_URI_RAW, g_tx.uri_raw, g_tx.uri_raw_len, truncated);
-    match_buffer(f, ts, RULE_BUF_HTTP_URI, g_tx.uri, g_tx.uri_len, truncated);
-    match_buffer(f, ts, RULE_BUF_HTTP_HEADER, g_tx.header, g_tx.header_len, truncated);
-    if (g_tx.has_user_agent)
-        match_buffer(f, ts, RULE_BUF_HTTP_USER_AGENT, g_tx.user_agent, g_tx.user_agent_len,
-                     truncated);
-    if (g_tx.host_len)
-        match_buffer(f, ts, RULE_BUF_HTTP_HOST, g_tx.host, g_tx.host_len, truncated);
-    if (g_tx.has_cookie)
-        match_buffer(f, ts, RULE_BUF_HTTP_COOKIE, g_tx.cookie, g_tx.cookie_len, truncated);
+    rule_input_t in;
+    http_input(&in, f);
+    eval_phase(f, ts, RULE_PHASE_HTTP_REQUEST, &in, truncated, 0);
 
     if (alert_total() == before && g_verbose) {
         fprintf(output_console(), "[clean] %s:%u -> %s:%u %.*s %.*s\n",
@@ -223,6 +313,12 @@ static void inspect_body(flow_t *f, const struct timeval *ts, const uint8_t *dat
                          size_t len, int truncated) {
     if (len == 0) return;
     g_stats.http_bodies++;
+    /* Body rules may also use the request's header buffers. g_tx may
+     * hold another flow's request by now, so parse this one again. */
+    const flow_app_t *a = &f->app;
+    if (a->body_start <= a->req_start ||
+        http_parse_tx(f->stream.buf + a->req_start, a->body_start - a->req_start, &g_tx) < 0)
+        return;
     if (f->app.body_form) {
         unsigned flags = 0;
         /* Form parameters are polluted the same way as query ones. */
@@ -232,7 +328,10 @@ static void inspect_body(flow_t *f, const struct timeval *ts, const uint8_t *dat
         data = g_body_norm;
         len = n;
     }
-    match_buffer(f, ts, RULE_BUF_HTTP_REQUEST_BODY, data, len, truncated);
+    rule_input_t in;
+    http_input(&in, f);
+    input_set(&in, RULE_BUF_HTTP_REQUEST_BODY, data, len);
+    eval_phase(f, ts, RULE_PHASE_HTTP_BODY, &in, truncated, 0);
 }
 
 enum { HTTP_ST_HEADERS = 0, HTTP_ST_BODY = 1, HTTP_ST_RESYNC = 2 };
@@ -394,17 +493,20 @@ static void inspect_tls(flow_t *f, const struct timeval *ts, uint32_t end, int f
 
     unsigned long before = alert_total();
     const char *sni = NULL;
+    rule_input_t in;
+    input_init(&in, f);
     if (r == 0) {
         g_stats.tls_client_hellos++;
         tls_hello_t *h = &g_hello;
         if (h->sni_len) {
             sni = h->sni;
-            match_buffer(f, ts, RULE_BUF_TLS_SNI, h->sni, h->sni_len, 0);
+            input_set(&in, RULE_BUF_TLS_SNI, h->sni, h->sni_len);
         }
-        if (h->alpn_len) match_buffer(f, ts, RULE_BUF_TLS_ALPN, h->alpn, h->alpn_len, 0);
-        match_buffer(f, ts, RULE_BUF_JA3_HASH, h->ja3_hash, strlen(h->ja3_hash), 0);
-        match_buffer(f, ts, RULE_BUF_JA3_STRING, h->ja3, h->ja3_len, 0);
-        match_buffer(f, ts, RULE_BUF_JA4_HASH, h->ja4, strlen(h->ja4), 0);
+        if (h->alpn_len) input_set(&in, RULE_BUF_TLS_ALPN, h->alpn, h->alpn_len);
+        input_set(&in, RULE_BUF_JA3_HASH, h->ja3_hash, strlen(h->ja3_hash));
+        input_set(&in, RULE_BUF_JA3_STRING, h->ja3, h->ja3_len);
+        input_set(&in, RULE_BUF_JA4_HASH, h->ja4, strlen(h->ja4));
+        eval_phase(f, ts, RULE_PHASE_TLS_HELLO, &in, 0, 0);
         if (h->ech) {
             g_stats.tls_ech++;
             flow_anomaly(f, ts, ANOMALY_SID_TLS_ECH, 3,
@@ -418,7 +520,8 @@ static void inspect_tls(flow_t *f, const struct timeval *ts, uint32_t end, int f
         if (n < 0) return;
         g_stats.tls_client_hellos++;
         sni = partial;
-        match_buffer(f, ts, RULE_BUF_TLS_SNI, partial, (size_t)n, 1);
+        input_set(&in, RULE_BUF_TLS_SNI, partial, (size_t)n);
+        eval_phase(f, ts, RULE_PHASE_TLS_HELLO, &in, 1, 0);
     }
 
     if (alert_total() == before && g_verbose) {
@@ -442,11 +545,17 @@ static void inspect_dns_message(flow_t *f, const struct timeval *ts,
     dns_message_t m;
     if (dns_parse_message(msg, len, &m) < 0 || m.response) return;
 
+    /* One alert per rule and message, however many questions match. */
+    int msg_sids[MSG_SIDS_MAX], nmsg_sids = 0;
+
     for (int i = 0; i < m.nquestions; i++) {
         const dns_question_t *q = &m.q[i];
         unsigned long before = alert_total();
         g_stats.dns_queries++;
-        match_buffer(f, ts, RULE_BUF_DNS_QUERY, q->name, q->name_len, truncated);
+        rule_input_t in;
+        input_init(&in, f);
+        input_set(&in, RULE_BUF_DNS_QUERY, q->name, q->name_len);
+        eval_phase_ex(f, ts, RULE_PHASE_DNS_QUERY, &in, truncated, 0, msg_sids, &nmsg_sids);
         if (q->name_len > DNS_LONG_NAME || q->longest_label > DNS_LONG_LABEL)
             flow_anomaly(f, ts, ANOMALY_SID_DNS_LONG_NAME, 2,
                          "DNS: unusually long query name (possible tunneling)",
@@ -511,8 +620,9 @@ static void dispatch(flow_t *f, const struct timeval *ts, uint32_t end, int fina
             if (p == APP_UNKNOWN) return;
             a->proto = (uint8_t)p;
         }
-        a->raw_scan = (uint8_t)rules_any_raw("tcp", app_name_of((app_proto_t)a->proto),
-                                             f->port[1]);
+        rule_input_t in;
+        input_init(&in, f);
+        a->raw_scan = (uint8_t)rules_raw_applies(rules_active(), RULE_PHASE_TCP_STREAM, &in);
         if (a->proto == APP_NONE && !a->raw_scan) {
             a->done = 1;
             return;
@@ -590,7 +700,7 @@ static void handle_tcp(flow_t *f, int dir, const struct timeval *ts, const packe
 
     if (s->overlap_diff && !a->overlap_alerted) {
         a->overlap_alerted = 1;
-        flow_alert(f, ts, ANOMALY_SID_STREAM_OVERLAP, 2,
+        flow_alert(f, ts, NULL, ANOMALY_SID_STREAM_OVERLAP, 2,
                    "Stream: overlapping TCP data differs (possible evasion)",
                    ALERT_SOURCE_ANOMALY, pkt->payload, pkt->payload_len, pkt->truncated);
     }
@@ -602,10 +712,12 @@ static void handle_udp(flow_t *f, int dir, const struct timeval *ts, const packe
     int dns = dir == FLOW_TO_SERVER && f->port[1] == DNS_PORT;
     if (dns && f->app.proto == APP_UNKNOWN) f->app.proto = APP_DNS;
 
-    if (pkt->payload_len) {
-        hit_ctx_t ctx = { f, ts, pkt->payload, pkt->payload + pkt->payload_len, pkt->truncated };
-        rules_match(pkt->payload, pkt->payload_len, "udp", dns ? "dns" : NULL,
-                    pkt->dst_port, on_rule_hit, &ctx);
+    /* Raw UDP rules see each client -> server payload once. */
+    if (pkt->payload_len && dir == FLOW_TO_SERVER) {
+        rule_input_t in;
+        input_init(&in, f);
+        input_set(&in, RULE_BUF_RAW, pkt->payload, pkt->payload_len);
+        eval_phase(f, ts, RULE_PHASE_UDP, &in, pkt->truncated, 0);
     }
     if (dns) inspect_dns_message(f, ts, pkt->payload, pkt->payload_len, pkt->truncated);
 }
@@ -688,6 +800,15 @@ void engine_print_stats(FILE *fp) {
     fprintf(fp, "  HTTP requests       : %lu (%lu bodies)\n", s->http_requests, s->http_bodies);
     fprintf(fp, "  TLS ClientHellos    : %lu (%lu with ECH)\n", s->tls_client_hellos, s->tls_ech);
     fprintf(fp, "  DNS queries         : %lu\n", s->dns_queries);
+    const rules_stats_t *rst = rules_stats();
+    fprintf(fp, "  Rule evaluations    : %lu (%lu candidates after prefilter, %lu matches)\n",
+            rst->evaluations, rst->candidates, rst->matches);
+    if (rst->pcre_limit || rst->backtrack_limit)
+        fprintf(fp, "  Rule limits hit     : %lu pcre match limit, %lu backtracking budget\n",
+                rst->pcre_limit, rst->backtrack_limit);
+    if (s->thresholded || s->passed_flows)
+        fprintf(fp, "  Suppressed          : %lu by threshold, %lu flows passed\n",
+                s->thresholded, s->passed_flows);
     fprintf(fp, "  Signature alerts    : %lu\n", s->signature_alerts);
     fprintf(fp, "  Anomaly alerts      : %lu\n", s->anomaly_alerts);
     fprintf(fp, "=======================================\n");

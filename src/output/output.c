@@ -8,6 +8,7 @@
 
 #define PAYLOAD_LOG_MAX     256 /* source bytes of payload kept in the JSON log */
 #define PAYLOAD_CONSOLE_MAX 120
+#define RULE_CATEGORY_JSON_MAX 96
 #define MSG_JSON_MAX        (128 * 6 + 1)
 
 static FILE *g_log = NULL;
@@ -144,22 +145,30 @@ void output_alert(const alert_event_t *ev) {
     if (g_log) {
         char msg[MSG_JSON_MAX];
         char payload[PAYLOAD_LOG_MAX * 6 + 1];
-        char app[32] = "";
+        char app[32] = "", cat[RULE_CATEGORY_JSON_MAX] = "";
         size_t plen = ev->data_len < PAYLOAD_LOG_MAX ? ev->data_len : PAYLOAD_LOG_MAX;
 
         json_escape(msg, sizeof(msg), (const uint8_t *)ev->msg, strlen(ev->msg));
         json_escape(payload, sizeof(payload), ev->data, plen);
         if (ev->app_proto) snprintf(app, sizeof(app), "\"app_proto\":\"%s\",", ev->app_proto);
+        if (ev->category) {
+            char esc[RULE_CATEGORY_JSON_MAX - 16];
+            json_escape(esc, sizeof(esc), (const uint8_t *)ev->category, strlen(ev->category));
+            snprintf(cat, sizeof(cat), "\"category\":\"%s\",", esc);
+        }
 
         fprintf(g_log,
                 "{\"timestamp\":\"%s\",\"flow_id\":%llu,\"event_type\":\"alert\","
                 "\"src_ip\":\"%s\",\"src_port\":%u,"
-                "\"dest_ip\":\"%s\",\"dest_port\":%u,\"proto\":\"TCP\",%s"
-                "\"alert\":{\"sid\":%d,\"priority\":%d,\"source\":\"%s\",\"msg\":\"%s\"},"
+                "\"dest_ip\":\"%s\",\"dest_port\":%u,\"proto\":\"%s\",%s"
+                "\"alert\":{\"action\":\"%s\",\"sid\":%d,\"rev\":%d,\"priority\":%d,%s"
+                "\"source\":\"%s\",\"msg\":\"%s\"},"
                 "\"payload\":\"%s\",\"payload_truncated\":%s}\n",
                 ts, (unsigned long long)ev->flow_id,
-                ev->src_ip, ev->src_port, ev->dst_ip, ev->dst_port, app,
-                ev->sid, ev->priority, src_name, msg,
+                ev->src_ip, ev->src_port, ev->dst_ip, ev->dst_port,
+                ev->proto ? ev->proto : "TCP", app,
+                ev->action ? ev->action : "alert", ev->sid, ev->rev, ev->priority, cat,
+                src_name, msg,
                 payload, (plen < ev->data_len || ev->truncated) ? "true" : "false");
         fflush(g_log);
     }

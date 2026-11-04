@@ -16,6 +16,12 @@ CFLAGS  ?= -O2
 CFLAGS  += -std=gnu11 -Wall -Wextra -Wshadow -Wformat=2 -Iinclude -MMD -MP
 LDLIBS  += -lpcap
 
+# PCRE2 (8-bit): pkg-config, else pcre2-config, else the default paths.
+PCRE2_CFLAGS := $(shell pkg-config --cflags libpcre2-8 2>/dev/null || pcre2-config --cflags 2>/dev/null)
+PCRE2_LIBS   := $(shell pkg-config --libs libpcre2-8 2>/dev/null || pcre2-config --libs8 2>/dev/null || echo -lpcre2-8)
+CFLAGS  += $(PCRE2_CFLAGS)
+LDLIBS  += $(PCRE2_LIBS)
+
 ifeq ($(WERROR),1)
 CFLAGS  += -Werror
 endif
@@ -40,7 +46,10 @@ LIB_SRC := src/util/bytes.c \
            src/app/http/http.c \
            src/app/tls/tls.c \
            src/app/dns/dns.c \
-           src/detect/rules.c \
+           src/detect/mpm.c \
+           src/detect/threshold.c \
+           src/detect/rule_parse.c \
+           src/detect/detect.c \
            src/anomaly/anomaly.c \
            src/output/output.c \
            src/core/engine.c

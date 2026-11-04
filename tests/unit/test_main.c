@@ -7,6 +7,7 @@ int g_test_failed = 0;
 
 extern const test_case_t bytes_tests[];
 extern const test_case_t rules_tests[];
+extern const test_case_t threshold_tests[];
 extern const test_case_t decode_tests[];
 extern const test_case_t http_tests[];
 extern const test_case_t http_norm_tests[];
@@ -24,6 +25,7 @@ static const struct {
 } SUITES[] = {
     { "bytes",   bytes_tests },
     { "rules",   rules_tests },
+    { "threshold", threshold_tests },
     { "decode",  decode_tests },
     { "http",    http_tests },
     { "httpnorm", http_norm_tests },

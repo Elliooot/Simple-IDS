@@ -454,13 +454,13 @@ def gen_stream_retransmit():
     tl.add(*c.handshake(), c.data(0, req), c.data(8, b"<script>"))
     alerts.append(alert(900005, 52001))
 
-    # Keep-alive: two requests on one connection. The signature fires once
-    # per flow; anomalies are checked for every request.
+    # Keep-alive: two requests on one connection. Rules on parsed requests
+    # fire once per request (Phase 4, as in Suricata), anomalies too.
     r1 = b"GET /?x=<script>" + REQ_TAIL
     r2 = b"GET /?y=<script> HTTP/1.1\r\nHost: t\r\nUser-Agent: X\r\n\r\n"
     c = Conn(52002)
     tl.add(*c.handshake(), c.data(0, r1), c.data(len(r1), r2))
-    alerts += [alert(1001, 52002), alert(900003, 52002)]
+    alerts += [alert(1001, 52002), alert(1001, 52002), alert(900003, 52002)]
 
     # POST with a body: the next request starts after Content-Length bytes.
     body = b"GET /looks-like-a-request-but-is-body"
