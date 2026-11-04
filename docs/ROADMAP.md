@@ -2,7 +2,7 @@
 
 > 狀態：草案 v0.1（2026-11-03）
 > 基準版本：commit `8dbe7c3`（Phase 1 完成）
-> 進度：Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
+> 進度：Phase 4 完成（分支 `phase-4`，2026-11-04）；Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
 > 用途：作為後續開發（含 Claude Code 雲端 session）的單一依據。每完成一項，就在對應的 checkbox 打勾，並註記 commit。
 
 ---
@@ -172,13 +172,24 @@ alert http any any -> $HOME_NET any (
   - 尚未實作：HTTP 回應解析、TLS ServerHello（JA3S/JA4S）、DNS 回應檢查、DGA 熵值啟發式。
 
 ### Phase 4 — 偵測引擎強化
-- [ ] 實作規則語言 v2（§4.2 的內容）
-- [ ] 用 Aho-Corasick 做 MPM 預篩，搭配 PCRE2
-- [ ] 實作 `threshold` 和 `detection_filter`，避免告警洪水
-- [ ] 規則熱重載（SIGHUP），重載過程要原子化
-- [ ] 實作 `--test-rules` 規則檢查工具
-- [ ] 擴充規則庫到 150–300 條，參考 OWASP CRS 的分類
+- [x] 實作規則語言 v2（§4.2 的內容）（`4dd728f`：`src/detect/rule_parse.c`。動作 `alert`／`drop`／`pass`；協定 `ip`／`tcp`／`udp`／`http`／`tls`／`dns`；位址與 port 支援清單、否定、CIDR（v4/v6）、範圍 `lo:hi`、`$變數`（規則檔內的 `var`／`ipvar`／`portvar`、`--var NAME=VALUE`、內建預設值）、雙向 `<>`；每條規則最多 16 個 content／pcre 條件，可混用多個 sticky buffer，修飾詞 `nocase`、`offset`、`depth`、`distance`、`within`、`startswith`、`endswith`、`fast_pattern`、否定 `!`；`flow`、`classtype`（決定預設 priority）、`rev`、`reference`、`metadata`；規則檔可用 `\` 續行。測試：unit `rules`（35 個）、回歸 `rules_v2`）
+- [x] 用 Aho-Corasick 做 MPM 預篩，搭配 PCRE2（`4dd728f`：`src/detect/mpm.c`，每個 (phase, buffer) 一個 DFA，字母表先轉小寫再壓縮；每條規則取一個 fast pattern（`fast_pattern` 指定，否則最長的正向 content），沒有 content 的規則放進每次都驗證的清單。相對比對依 Suricata 語意並可回溯（每次評估上限 4096 步）。PCRE2 啟用 JIT，match limit 10000、depth limit 2000，超過上限視為不符合並計數。測試：`test_mpm_classic`、`test_mpm_vs_naive`（隨機比對樸素搜尋）、`test_eval_prefilter_consistent`）
+- [x] 實作 `threshold` 和 `detection_filter`，避免告警洪水（`4dd728f`：`src/detect/threshold.c`，`limit`／`threshold`／`both`／`detection_filter`，`track by_src`／`by_dst`／`by_rule`／`by_both`，固定大小的表格加 LRU 淘汰，時間用封包時間。測試：unit `threshold`、`test_engine_detection_filter`、`test_engine_threshold_limit`、回歸 `rules_v2`）
+- [x] 規則熱重載（SIGHUP），重載過程要原子化（`4dd728f`、`7158c59`：先完整建好新規則集，零錯誤才一次換上；任何一行錯誤或檔案不見都保留舊規則並印出原因。訊號只設旗標並 `pcap_breakloop`，在兩個封包之間換。測試：`tests/cli/test_cli.py` 用 FIFO 餵封包，精確控制 SIGHUP 前後送達的封包）
+- [x] 實作 `--test-rules` 規則檢查工具（`4dd728f`、`7158c59`：回報 `檔案:行號` 錯誤與重複 sid，警告效能較差的規則（沒有 fast pattern、fast pattern < 3 bytes、raw 規則不限 port、沒有 anchor 的 pcre 等），列出每個 phase 的規則數、預篩 pattern 數、DFA 狀態數與記憶體；有錯誤時 exit 1。測試：`tests/cli/test_cli.py`、`test_lint`）
+- [x] 擴充規則庫到 150–300 條，參考 OWASP CRS 的分類（`4e16ece`：`rules/crs/` 共 267 條，加上核心 33 條共 300 條。分類對應 CRS 規則檔：913 掃描器、920／921 協定、930 LFI、931 RFI、932 RCE、933 PHP、934 通用（SSTI、Node.js、原型污染、SSRF、XXE、OAST）、941 XSS、942 SQLi／NoSQLi／LDAPi、943 session fixation、944 Java；sid 前三碼是 CRS 檔案編號，但規則內容是自己寫的，不是 CRS 的翻譯。每條都有 3 bytes 以上的 content anchor，`--test-rules` 零警告。測試：`tests/rules/test_library.py` 每條規則一個樣本必須觸發，另有 70 個正常請求必須零告警）
 - **驗收**：載入 300 條規則時，吞吐量下降 < 30%（跟 10 條規則比較）。
+  - ✅ `make bench`（`fd80ddd`）：40,000 個 HTTP 請求（完整 TCP 連線、瀏覽器 header、15% 表單 POST、2% 攻擊），10 條規則 578 Mbit/s、300 條規則 529 Mbit/s，下降 **8.5%**（雲端 Linux x86 容器，release 建置，5 次取最快）。同樣流量去掉攻擊後，300 條規則零告警。
+- **行為說明與已知限制**
+  - 告警語意改變：HTTP／TLS／DNS 這類解析過的訊息改成「每個訊息（transaction）各自告警」，跟 Suricata 一致；keep-alive 連線上兩個帶 `<script>` 的請求會有兩筆告警。raw 串流規則和異常偵測維持每條 flow 每個 sid 一次；raw UDP 規則每個 client→server 封包各自比對。一個 DNS 訊息裡多個 question 命中同一條規則只告警一次。
+  - `pass` 規則命中後，該 flow 之後不再做任何規則比對（異常偵測照常）。`drop` 目前等同 `alert`（IPS 模式在 Phase 6）。
+  - `flow:established`：TCP 除了 SYN_SENT 以外都算（含中途加入的連線）；UDP 在 server 回過封包之後才算。`flow:to_client` 永遠不會成立（目前只檢查請求方向）。
+  - raw TCP 規則的重掃範圍：如果所有 raw TCP 規則都是單一正向 content，只重掃最長 content 長度的重疊區；否則每次從串流開頭重掃。
+  - `http.header` 是正規化過的（`Name: value`，冒號前後空白去掉、折行合併），所以「冒號前多一個空白」這類 header 混淆無法直接比對；改由 921001（同時有 Content-Length 和 Transfer-Encoding）等規則抓。
+  - 預設規則改成 `rules/*.rules` 加 `rules/crs/*.rules`；`-R` 可以指定目錄。pcap 回歸測試與規避測試固定只載入核心規則（`-R rules`），規則庫另有自己的測試，所以改規則庫不會影響引擎的回歸預期。
+  - 核心規則 2002／2012 改用 PCRE2，Phase 3 的兩個 UNION 漏報已解決，規避測試集新增 2 個案例，偵測率 74/75（98.7%）。HPP 拆開註解的案例現在也會直接觸發 2002／2012（合併前的 `UNION/*&id=*/SELECT` 本身就是 UNION、註解、SELECT）。
+  - WebDAV method（`PROPFIND`、`MKCOL` 等）現在也會被辨識成 HTTP。
+  - JSON log 的 `proto` 原本固定寫 `TCP`，現在依實際協定輸出；`alert` 物件多了 `action`、`rev`、`category`。
 
 ### Phase 5 — 穩健性與維運
 - [ ] 用 libFuzzer 為 decoder、HTTP、TLS、DNS、規則 parser 各寫一個 fuzz target，並放進 CI 跑短時間的 smoke 測試
@@ -186,7 +197,7 @@ alert http any any -> $HOME_NET any (
 - [ ] 編譯強化：`-D_FORTIFY_SOURCE=3`、`-fstack-protector-strong`、PIE、RELRO
 - [ ] 設定檔（INI 或 YAML 子集），並支援 log 輪替
 - [ ] 統計輸出：pps、丟包率、flow 數、記憶體用量
-- [ ] 效能基準測試：`make bench` 跑固定的 pcap，輸出 Mbps
+- [ ] 效能基準測試：`make bench` 跑固定的 pcap，輸出 Mbps（Phase 4 已有 `make bench` 比較 10 條與全部規則的吞吐量；還缺每封包延遲與記憶體高峰）
 - **驗收**：每個 fuzz target 累積 ≥ 24 小時沒有 crash，達到 §3.3 的效能目標。
 
 ### Phase 6 — 進階選配（依興趣挑選）
