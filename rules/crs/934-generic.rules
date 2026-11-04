@@ -1,0 +1,52 @@
+# SimpleIDS rule library: generic application attacks.
+#
+# Grouped like OWASP CRS REQUEST-934-APPLICATION-ATTACK-GENERIC: template
+# injection, Node.js, prototype pollution, SSRF and XXE, plus DNS / TLS
+# lookups of out-of-band testing (OAST) services that blind injection
+# payloads call back to. Written for SimpleIDS; samples in
+# tests/rules/samples.py.
+
+# --- Server-side template injection --------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: Python __class__ traversal"; http.uri; content:"__class__"; classtype:web-application-attack; sid:934001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: Python __globals__"; http.uri; content:"__globals__"; classtype:web-application-attack; sid:934002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: Python __builtins__"; http.uri; content:"__builtins__"; classtype:web-application-attack; sid:934004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: Python __import__"; http.uri; content:"__import__"; classtype:web-application-attack; sid:934005; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: arithmetic probe ({{7*7}}, ${7*7}, <%= 7*7 %>)"; http.uri; content:"7*7"; pcre:"/(?:\{\{|\$\{|#\{|<%=)\s*7\*7/"; classtype:web-application-attack; sid:934006; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: FreeMarker Execute utility"; http.uri; content:"freemarker.template.utility.execute"; nocase; classtype:web-application-attack; sid:934007; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: FreeMarker assign directive"; http.uri; content:"<#assign"; nocase; classtype:web-application-attack; sid:934008; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: Thymeleaf preprocessing expression"; http.uri; content:"__${"; classtype:web-application-attack; sid:934010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: ERB output tag"; http.uri; content:"<%="; classtype:web-application-attack; sid:934011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSTI: template injection in a request body"; http.request_body; content:"__class__"; classtype:web-application-attack; sid:934013; rev:1;)
+
+# --- Node.js and prototype pollution -------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"NODE: child_process"; http.uri; content:"child_process"; classtype:web-application-attack; sid:934020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"NODE: child_process in a request body"; http.request_body; content:"child_process"; classtype:web-application-attack; sid:934021; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"NODE: node-serialize function marker"; http.request_body; content:"_$$ND_FUNC$$_"; classtype:web-application-attack; reference:cve,2017-5941; sid:934023; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOTYPE POLLUTION: __proto__ in the request target"; http.uri; content:"__proto__"; classtype:web-application-attack; sid:934024; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOTYPE POLLUTION: __proto__ in a request body"; http.request_body; content:"__proto__"; classtype:web-application-attack; sid:934025; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOTYPE POLLUTION: constructor.prototype"; http.uri; content:"constructor"; pcre:"/constructor\s*(?:\[\s*['\"]?prototype|\.prototype)/i"; classtype:web-application-attack; sid:934026; rev:1;)
+
+# --- Server-side request forgery -----------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SSRF: cloud metadata address in the request target"; http.uri; content:"169.254.169.254"; classtype:web-application-attack; sid:934030; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSRF: cloud metadata address in a request body"; http.request_body; content:"169.254.169.254"; classtype:web-application-attack; sid:934031; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSRF: Google Cloud metadata host"; http.uri; content:"metadata.google.internal"; nocase; classtype:web-application-attack; sid:934032; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSRF: loopback URL in a parameter"; http.uri; content:"://"; pcre:"/=(?:https?|gopher|dict|ftp):\/\/(?:127\.|localhost\b|0\.0\.0\.0|0\/|\[::1?\])/i"; classtype:web-application-attack; sid:934034; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SSRF: numeric (decimal or hex) IP host in a URL"; http.uri; content:"://"; pcre:"/=(?:https?|gopher):\/\/(?:0x[0-9a-f]{8}|\d{8,10})(?:[\/:?]|$)/i"; classtype:web-application-attack; sid:934035; rev:1;)
+
+# --- XML external entities -----------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"XXE: external entity declaration"; http.request_body; content:"<!entity"; nocase; pcre:"/<!ENTITY\s+(?:%\s*)?[\w.-]+\s+(?:SYSTEM|PUBLIC)\s/i"; classtype:web-application-attack; sid:934040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XXE: parameter entity declaration"; http.request_body; content:"<!entity"; nocase; pcre:"/<!ENTITY\s+%/i"; classtype:web-application-attack; sid:934041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XXE: XInclude"; http.request_body; content:"xi:include"; nocase; classtype:web-application-attack; sid:934042; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XXE: entity declaration in the request target"; http.uri; content:"<!entity"; nocase; classtype:web-application-attack; sid:934043; rev:1;)
+
+# --- Out-of-band testing services (blind injection callbacks) -----------
+alert dns any any -> any any (msg:"OAST: interactsh domain lookup"; dns.query; dotprefix; content:".interact.sh"; nocase; endswith; classtype:web-application-attack; sid:934050; rev:1;)
+alert dns any any -> any any (msg:"OAST: oast.fun domain lookup"; dns.query; dotprefix; content:".oast.fun"; nocase; endswith; classtype:web-application-attack; sid:934051; rev:1;)
+alert dns any any -> any any (msg:"OAST: oast.me domain lookup"; dns.query; dotprefix; content:".oast.me"; nocase; endswith; classtype:web-application-attack; sid:934052; rev:1;)
+alert dns any any -> any any (msg:"OAST: Burp Collaborator domain lookup"; dns.query; dotprefix; content:".burpcollaborator.net"; nocase; endswith; classtype:web-application-attack; sid:934055; rev:1;)
+alert dns any any -> any any (msg:"OAST: oastify.com domain lookup"; dns.query; dotprefix; content:".oastify.com"; nocase; endswith; classtype:web-application-attack; sid:934056; rev:1;)
+alert dns any any -> any any (msg:"OAST: dnslog.cn domain lookup"; dns.query; dotprefix; content:".dnslog.cn"; nocase; endswith; classtype:web-application-attack; sid:934057; rev:1;)
+alert tls any any -> any any (msg:"OAST: interactsh in TLS SNI"; tls.sni; dotprefix; content:".interact.sh"; nocase; endswith; classtype:web-application-attack; sid:934060; rev:1;)
+alert tls any any -> any any (msg:"OAST: Burp Collaborator in TLS SNI"; tls.sni; dotprefix; content:".oastify.com"; nocase; endswith; classtype:web-application-attack; sid:934061; rev:1;)
+alert tls any any -> any any (msg:"POLICY: ngrok tunnel in TLS SNI"; tls.sni; dotprefix; content:".ngrok-free.app"; nocase; endswith; classtype:policy-violation; priority:3; sid:934062; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"OAST: callback domain in a request header"; http.header; content:".oast"; nocase; pcre:"/\.(?:oast\.(?:fun|me|pro|live|site|online)|oastify\.com)\b/i"; classtype:web-application-attack; sid:934063; rev:1;)

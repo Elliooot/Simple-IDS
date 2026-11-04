@@ -1,0 +1,50 @@
+{
+  "description": "Rule language v2: pcre, distance/within, variables, threshold, detection_filter, pass, raw TCP with flow",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 100,
+      "src_ip": "10.0.0.2",
+      "src_port": 61000,
+      "dest_port": 80
+    },
+    {
+      "sid": 101,
+      "src_ip": "10.0.0.2",
+      "src_port": 61001,
+      "dest_port": 80
+    },
+    {
+      "sid": 105,
+      "src_ip": "10.0.0.2",
+      "src_port": 61040,
+      "dest_port": 21
+    },
+    {
+      "sid": 103,
+      "src_ip": "10.0.0.20",
+      "src_port": 61020,
+      "dest_port": 80
+    },
+    {
+      "sid": 102,
+      "src_ip": "10.0.0.7",
+      "src_port": 61013,
+      "dest_port": 80
+    },
+    {
+      "sid": 102,
+      "src_ip": "10.0.0.7",
+      "src_port": 61014,
+      "dest_port": 80
+    }
+  ],
+  "args": [
+    "-R",
+    "tests/pcaps/rules_v2.rules",
+    "--var",
+    "HOME_NET=[10.0.0.0/24]",
+    "-f",
+    ""
+  ]
+}

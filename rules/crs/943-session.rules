@@ -1,0 +1,11 @@
+# SimpleIDS rule library: session fixation.
+#
+# Grouped like OWASP CRS REQUEST-943-APPLICATION-ATTACK-SESSION-FIXATION:
+# a session identifier passed in the query string lets an attacker hand a
+# victim a session id they already know. Written for SimpleIDS; samples in
+# tests/rules/samples.py.
+
+alert http any any -> $HTTP_SERVERS any (msg:"SESSION: PHPSESSID in the query string"; http.uri; content:"phpsessid="; nocase; pcre:"/[?&]phpsessid=/i"; classtype:attempted-user; priority:2; sid:943001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SESSION: JSESSIONID in the query string"; http.uri; content:"jsessionid="; nocase; pcre:"/[?&]jsessionid=/i"; classtype:attempted-user; priority:2; sid:943002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SESSION: ASPSESSIONID in the query string"; http.uri; content:"aspsessionid"; nocase; pcre:"/[?&]aspsessionid\w*=/i"; classtype:attempted-user; priority:2; sid:943003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SESSION: cookie set from script in the request"; http.uri; content:"document.cookie"; nocase; pcre:"/document\.cookie\s*=/i"; classtype:attempted-user; sid:943004; rev:1;)

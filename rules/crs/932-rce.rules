@@ -1,0 +1,45 @@
+# SimpleIDS rule library: remote command execution.
+#
+# Grouped like OWASP CRS REQUEST-932-APPLICATION-ATTACK-RCE. Generic shell
+# words (cat, sleep, curl ...) only alert after a shell separator, so that
+# "how to use curl" in a search box stays quiet. Written for SimpleIDS;
+# samples in tests/rules/samples.py.
+
+# --- Unix commands -------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: id command after a semicolon"; http.uri; content:"|3b|id"; pcre:"/\;id(?:$|[\s\;|&`])/"; classtype:web-application-attack; sid:932001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: id command after a pipe"; http.uri; content:"|7c|id"; pcre:"/\|id(?:$|[\s\;|&`])/"; classtype:web-application-attack; sid:932026; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: whoami"; http.uri; content:"whoami"; nocase; classtype:web-application-attack; sid:932002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: uname -a"; http.uri; content:"uname"; nocase; pcre:"/uname\s+-[a-z]*a/i"; classtype:web-application-attack; sid:932003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: cat of an absolute path after a separator"; http.uri; content:"cat"; pcre:"/[\;|&`(]\s*cat\s+\//"; classtype:web-application-attack; sid:932004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: wget of a URL"; http.uri; content:"wget"; nocase; pcre:"/\bwget\s+(?:-\S+\s+)*(?:https?|ftp):\/\//i"; classtype:web-application-attack; sid:932005; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: curl after a separator"; http.uri; content:"curl"; nocase; pcre:"/[\;|&`(]\s*curl\s/i"; classtype:web-application-attack; sid:932006; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: netcat with -e (reverse shell)"; http.uri; content:"-e /bin/"; classtype:web-application-attack; sid:932007; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: /dev/tcp reverse shell"; http.uri; content:"/dev/tcp/"; classtype:web-application-attack; sid:932008; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: interactive bash"; http.uri; content:"bash"; pcre:"/\bbash\s+-i\b/"; classtype:web-application-attack; sid:932009; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: python -c"; http.uri; content:"python"; pcre:"/\bpython[23]?\s+-c\s/"; classtype:web-application-attack; sid:932010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: perl -e"; http.uri; content:"perl"; pcre:"/\bperl\s+-e\s/"; classtype:web-application-attack; sid:932011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: chmod +x or 777"; http.uri; content:"chmod"; pcre:"/\bchmod\s+(?:\+x|[0-7]?777)(?:$|\s)/"; classtype:web-application-attack; sid:932012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: $IFS whitespace evasion"; http.uri; content:"IFS"; pcre:"/\$\{?IFS\b/"; classtype:web-application-attack; sid:932013; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: /bin/bash"; http.uri; content:"/bin/bash"; classtype:web-application-attack; sid:932014; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: sleep after a separator (blind command injection)"; http.uri; content:"sleep"; pcre:"/[\;|&`(]\s*sleep\s+\d/"; classtype:web-application-attack; sid:932017; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: ping -c after a separator (blind command injection)"; http.uri; content:"ping"; pcre:"/[\;|&`(]\s*ping\s+-[cn]\s*\d/"; classtype:web-application-attack; sid:932018; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: DNS lookup after a separator (out-of-band exfiltration)"; http.uri; content:"lookup"; nocase; pcre:"/[\;|&`(]\s*nslookup\s+\S/i"; classtype:web-application-attack; sid:932019; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: mkfifo (reverse shell)"; http.uri; content:"mkfifo"; classtype:web-application-attack; sid:932020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: wildcard path obfuscation (/???/)"; http.uri; content:"/???/"; classtype:web-application-attack; sid:932021; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: command injection in a request body"; http.request_body; content:"/dev/tcp/"; classtype:web-application-attack; sid:932024; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: separator plus command in a request body"; http.request_body; content:"bin/"; pcre:"/[\;|&`]\s*(?:\/usr)?\/bin\/(?:ba|z|da)?sh\b/"; classtype:web-application-attack; sid:932025; rev:1;)
+
+# --- Shellshock ----------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: Shellshock function definition in a header"; http.header; content:"() {"; reference:cve,2014-6271; classtype:attempted-admin; sid:932030; rev:1;)
+
+# --- Windows commands ----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: PowerShell with options"; http.uri; content:"powershell"; nocase; pcre:"/powershell(?:\.exe)?\s+-/i"; classtype:web-application-attack; sid:932040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: PowerShell DownloadString"; http.uri; content:"downloadstring"; nocase; classtype:web-application-attack; sid:932041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: cmd /c"; http.uri; content:"cmd"; nocase; pcre:"/\bcmd(?:\.exe)?\s+\/[ck]\s/i"; classtype:web-application-attack; sid:932043; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: certutil download or decode"; http.uri; content:"certutil"; nocase; pcre:"/certutil(?:\.exe)?\s.*-(?:urlcache|decode)/i"; classtype:web-application-attack; sid:932044; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: bitsadmin transfer"; http.uri; content:"bitsadmin"; nocase; classtype:web-application-attack; sid:932045; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: net user /add"; http.uri; content:"net user"; nocase; content:"/add"; nocase; distance:0; classtype:web-application-attack; sid:932046; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: rundll32"; http.uri; content:"rundll32"; nocase; classtype:web-application-attack; sid:932047; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: regsvr32 scriptlet (Squiblydoo)"; http.uri; content:"regsvr32"; nocase; classtype:web-application-attack; sid:932048; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: mshta with a URL or script"; http.uri; content:"mshta"; nocase; pcre:"/mshta(?:\.exe)?\s+(?:https?:|javascript:|vbscript:)/i"; classtype:web-application-attack; sid:932049; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"RCE: wmic process call create"; http.uri; content:"wmic"; nocase; pcre:"/wmic(?:\.exe)?\s.*process\s+call\s+create/i"; classtype:web-application-attack; sid:932050; rev:1;)

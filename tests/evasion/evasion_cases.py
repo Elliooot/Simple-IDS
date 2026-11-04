@@ -80,10 +80,6 @@ def form(category, desc, body, attack, extra=(), **kw):
 
 
 # known_miss reasons end up in docs/EVASION.md, which is in Chinese.
-PHASE4_SQL = ("規則 2002 比對的是字面字串 'UNION SELECT'，但 SQL 允許兩個關鍵字之間"
-              "是任何空白字元（tab、換行）或行內註解。需要 Phase 4 的 PCRE2，"
-              "例如 UNION[\\s/*]+SELECT。")
-
 CASES = [
     # ------------------------------------------------------------------
     # URL encoding
@@ -119,10 +115,16 @@ CASES = [
     form("url-encoding", "Form body, '+' as space", b"q=1+UNION+SELECT+2", {2012}),
     EvasionCase("url-encoding", "Chunked body splits the payload",
                 "/upload", {1011}, method="POST", chunks=[b"x=<scr", b"ipt>"]),
+    # Phase 4: rule 2002 uses PCRE2, so any whitespace or inline comment
+    # between the keywords matches (these two were known misses in Phase 3).
     EvasionCase("url-encoding", "Encoded tab between UNION and SELECT",
-                "/?id=1%09UNION%09SELECT%091", {2002}, known_miss=PHASE4_SQL),
+                "/?id=1%09UNION%09SELECT%091", {2002}),
     EvasionCase("url-encoding", "Encoded newline between UNION and SELECT",
-                "/?id=1%0aUNION%0aSELECT%0a1", {2002}, known_miss=PHASE4_SQL),
+                "/?id=1%0aUNION%0aSELECT%0a1", {2002}),
+    EvasionCase("url-encoding", "Inline comments between UNION and SELECT",
+                "/?id=1/**/UNION/**/SELECT/**/1", {2002}),
+    EvasionCase("url-encoding", "UNION ALL SELECT with encoded tabs",
+                "/?id=1%09UNION%09ALL%09SELECT%091", {2002}),
 
     # ------------------------------------------------------------------
     # Mixed case
@@ -187,19 +189,22 @@ CASES = [
     EvasionCase("path", "Tomcat path parameter (..;/)", "/app/..;/..;/etc/passwd", {4003}),
 
     # ------------------------------------------------------------------
-    # HTTP parameter pollution
+    # HTTP parameter pollution. Since Phase 4 the split-comment cases also
+    # raise 2002/2012: before joining, "UNION/*&id=*/SELECT" already reads
+    # as UNION, a comment, SELECT.
     # ------------------------------------------------------------------
     EvasionCase("hpp", "SQL comment split across duplicate parameters (ASP.NET joins with ',')",
-                "/?id=1%20UNION/*&id=*/SELECT%201", {HPP}),
-    EvasionCase("hpp", "Split comment, encoded", "/?id=1%20UNION%2F*&id=*%2FSELECT%201", {HPP}),
+                "/?id=1%20UNION/*&id=*/SELECT%201", {HPP}, {2002}),
+    EvasionCase("hpp", "Split comment, encoded", "/?id=1%20UNION%2F*&id=*%2FSELECT%201", {HPP},
+                {2002}),
     EvasionCase("hpp", "Split comment across three copies",
-                "/?q=1%20UNION/*&q=*/SELECT/*&q=*/1", {HPP}),
-    EvasionCase("hpp", "Encoded parameter names", "/?%69d=1%20UNION/*&i%64=*/SELECT", {HPP}),
+                "/?q=1%20UNION/*&q=*/SELECT/*&q=*/1", {HPP}, {2002}),
+    EvasionCase("hpp", "Encoded parameter names", "/?%69d=1%20UNION/*&i%64=*/SELECT", {HPP}, {2002}),
     EvasionCase("hpp", "Attack in the second copy (PHP keeps the last)",
                 "/?id=1&id=1'%20OR%201=1--", {2001}),
     EvasionCase("hpp", "Attack in the first copy (JSP keeps the first)",
                 "/?x=<script>&x=safe", {1001}),
-    form("hpp", "Split comment in a form body", b"id=1+UNION/*&id=*/SELECT+1", {HPP}),
+    form("hpp", "Split comment in a form body", b"id=1+UNION/*&id=*/SELECT+1", {HPP}, {2012}),
     form("hpp", "Attack in the second form copy", b"c=ok&c=%3Cscript%3E", {1011}),
     EvasionCase("hpp", "Split comment across query and body (ASP.NET Request.Params)",
                 "/submit?id=1%20UNION/*", {HPP}, method="POST",

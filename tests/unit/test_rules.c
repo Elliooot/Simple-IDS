@@ -1,3 +1,4 @@
+#include <glob.h>
 #include <stdio.h>
 #include <unistd.h>
 
@@ -981,20 +982,6 @@ static void test_load_file(void) {
     ruleset_free(rs);
 }
 
-/* The shipped rule files must load without a single error. */
-static void test_repo_rules_load_cleanly(void) {
-    static const char *const files[] = { "rules/http.rules", "rules/tls.rules",
-                                         "rules/dns.rules", NULL };
-    ruleset_t *rs = ruleset_new();
-    for (int i = 0; files[i]; i++) {
-        int e = -1;
-        CHECK(ruleset_load_file(rs, files[i], &e) > 0);
-        CHECK_EQ_INT(e, 0);
-    }
-    CHECK_EQ_INT(ruleset_compile(rs), 0);
-    ruleset_free(rs);
-}
-
 static int g_warnings;
 static void count_warning(const rule_t *r, const char *msg, void *ctx) {
     (void)r;
@@ -1002,6 +989,34 @@ static void count_warning(const rule_t *r, const char *msg, void *ctx) {
     (void)ctx;
     g_warnings++;
 }
+
+/* The shipped rule files must load without a single error, and the
+ * library in rules/crs/ must also pass the lint without a warning. */
+static void test_repo_rules_load_cleanly(void) {
+    static const char *const dirs[] = { "rules/*.rules", "rules/crs/*.rules" };
+    int total = 0;
+    for (size_t d = 0; d < 2; d++) {
+        glob_t g;
+        CHECK_EQ_INT(glob(dirs[d], 0, NULL, &g), 0);
+        ruleset_t *rs = ruleset_new();
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            int e = -1;
+            CHECK(ruleset_load_file(rs, g.gl_pathv[i], &e) > 0);
+            CHECK_EQ_INT(e, 0);
+        }
+        globfree(&g);
+        CHECK_EQ_INT(ruleset_compile(rs), 0);
+        total += ruleset_count(rs);
+        if (d == 1) {
+            g_warnings = 0;
+            CHECK_EQ_INT(ruleset_lint(rs, count_warning, NULL), 0);
+            CHECK_EQ_INT(g_warnings, 0);
+        }
+        ruleset_free(rs);
+    }
+    CHECK(total >= 150 && total <= 300);       /* ROADMAP Phase 4 */
+}
+
 
 static void test_lint(void) {
     static const char *const clean[] = {

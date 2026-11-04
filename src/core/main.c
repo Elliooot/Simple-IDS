@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "simpleids/config.h"
@@ -55,7 +56,8 @@ static void usage(const char *prog) {
         "\n"
         "  -i IFACE   capture live on IFACE (default: %s; needs root)\n"
         "  -r FILE    read packets from a pcap file instead (no root needed)\n"
-        "  -R RULES   load a rules file; repeatable (default: %s)\n"
+        "  -R RULES   load a rules file, or every *.rules file in a directory;\n"
+        "             repeatable (default: %s)\n"
         "  -l LOG     JSON Lines alert log (default: %s)\n"
         "             '-' writes JSON to stdout, 'none' disables the log\n"
         "  -f FILTER  BPF capture filter (default: '%s', also inside VLAN tags\n"
@@ -77,7 +79,7 @@ static void usage(const char *prog) {
         "\n"
         "SIGHUP reloads the rule files; if any rule fails to load, the rules in\n"
         "use are kept. A single positional argument is treated as the interface.\n",
-        prog, prog, DEFAULT_IFACE, DEFAULT_RULES_GLOB, OUTPUT_DEFAULT_LOG, BPF_FILTER,
+        prog, prog, DEFAULT_IFACE, DEFAULT_RULES_DESC, OUTPUT_DEFAULT_LOG, BPF_FILTER,
         d.flow.max_flows, d.stream.depth / 1024, d.stream.memcap / (1024 * 1024));
 }
 
@@ -98,30 +100,59 @@ static int parse_size(const char *s, unsigned long long max, unsigned long long 
     return 0;
 }
 
+/* Add path to the list: a directory adds every *.rules file in it (in
+ * name order), anything else is taken as a file. Returns -1 on errors. */
+static int expand_rule_path(const char *path, char ***list, int *n) {
+    struct stat st;
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        char pattern[4096];
+        glob_t g;
+        snprintf(pattern, sizeof(pattern), "%s/*.rules", path);
+        if (glob(pattern, 0, NULL, &g) != 0) {
+            fprintf(stderr, "No rule files match %s\n", pattern);
+            return -1;
+        }
+        for (size_t i = 0; i < g.gl_pathc; i++) {
+            char **l = realloc(*list, (size_t)(*n + 1) * sizeof(**list));
+            char *dup = strdup(g.gl_pathv[i]);
+            if (!l || !dup) { free(dup); if (l) *list = l; globfree(&g); return -1; }
+            *list = l;
+            (*list)[(*n)++] = dup;
+        }
+        globfree(&g);
+        return 0;
+    }
+    char **l = realloc(*list, (size_t)(*n + 1) * sizeof(**list));
+    char *dup = strdup(path);
+    if (!l || !dup) { free(dup); if (l) *list = l; return -1; }
+    *list = l;
+    (*list)[(*n)++] = dup;
+    return 0;
+}
+
 /*
- * Load and compile the given files, or every file matching
- * DEFAULT_RULES_GLOB. *errors receives the number of skipped lines.
- * Returns NULL when a file cannot be opened, nothing loads, or memory
- * runs out.
+ * Load and compile the given files and directories, or the default rule
+ * directories. *errors receives the number of skipped lines. Returns NULL
+ * when a file cannot be opened, nothing loads, or memory runs out.
  */
-static ruleset_t *build_ruleset(char **files, int nfiles, int *errors, int report) {
-    glob_t g;
-    int used_glob = 0;
+static ruleset_t *build_ruleset(char **paths, int npaths, int *errors, int report) {
+    static const char *const defaults[] = DEFAULT_RULE_DIRS;
+    char **files = NULL;
+    int nfiles = 0, ok = 1;
     *errors = 0;
 
-    if (nfiles == 0) {
-        int rc = glob(DEFAULT_RULES_GLOB, 0, NULL, &g);
-        if (rc != 0) {
-            fprintf(stderr, "No rule files match %s (run from the repo root, or use -R)\n",
-                    DEFAULT_RULES_GLOB);
-            return NULL;
-        }
-        files = g.gl_pathv;
-        nfiles = (int)g.gl_pathc;
-        used_glob = 1;
+    if (npaths == 0) {
+        for (size_t i = 0; ok && i < sizeof(defaults) / sizeof(defaults[0]); i++)
+            ok = expand_rule_path(defaults[i], &files, &nfiles) == 0;
+        if (!ok)
+            fprintf(stderr, "Cannot load the default rules %s (run from the repo root, "
+                            "or use -R)\n", DEFAULT_RULES_DESC);
+    } else {
+        for (int i = 0; ok && i < npaths; i++)
+            ok = expand_rule_path(paths[i], &files, &nfiles) == 0;
     }
 
-    ruleset_t *rs = ruleset_new();
+    ruleset_t *rs = ok ? ruleset_new() : NULL;
     for (int i = 0; rs && i < nfiles; i++) {
         int e = 0;
         int n = ruleset_load_file(rs, files[i], &e);
@@ -135,7 +166,8 @@ static ruleset_t *build_ruleset(char **files, int nfiles, int *errors, int repor
                     e ? " (some lines skipped, see above)" : "");
         *errors += e;
     }
-    if (used_glob) globfree(&g);
+    for (int i = 0; i < nfiles; i++) free(files[i]);
+    free(files);
     if (!rs) return NULL;
 
     if (ruleset_count(rs) == 0) {

@@ -1,0 +1,39 @@
+# SimpleIDS rule library: local file inclusion and sensitive files.
+#
+# Grouped like OWASP CRS REQUEST-930-APPLICATION-ATTACK-LFI. http.uri is
+# the normalized target: percent escapes are decoded and "..", "./" and
+# "\" are resolved in the path (not in the query). Written for SimpleIDS;
+# samples in tests/rules/samples.py.
+
+# --- Unix system files ---------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: /etc/shadow"; http.uri; content:"/etc/shadow"; classtype:web-application-attack; sid:930001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: /etc/hosts"; http.uri; content:"/etc/hosts"; classtype:web-application-attack; priority:2; sid:930003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: /proc/self (environment, command line, file descriptors)"; http.uri; content:"/proc/self/"; classtype:web-application-attack; sid:930004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: web server log (log poisoning)"; http.uri; content:"/var/log/"; pcre:"/\/var\/log\/(?:apache2?|httpd|nginx)\//i"; classtype:web-application-attack; sid:930006; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: SSH private key"; http.uri; content:".ssh/id_"; nocase; classtype:web-application-attack; sid:930007; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: SSH authorized_keys"; http.uri; content:".ssh/authorized_keys"; nocase; classtype:web-application-attack; sid:930008; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: shell history"; http.uri; content:"_history"; nocase; pcre:"/\.(?:bash|zsh|sh|mysql|psql|python)_history/i"; classtype:web-application-attack; sid:930009; rev:1;)
+
+# --- Windows system files ------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: boot.ini"; http.uri; content:"boot.ini"; nocase; classtype:web-application-attack; sid:930010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: win.ini"; http.uri; content:"win.ini"; nocase; pcre:"/(?:^|[\/\\\\=])win\.ini/i"; classtype:web-application-attack; sid:930011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: system.ini"; http.uri; content:"system.ini"; nocase; classtype:web-application-attack; sid:930012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: Windows SAM database"; http.uri; content:"/config/sam"; nocase; classtype:web-application-attack; sid:930013; rev:1;)
+
+# --- Source control and deployment secrets ------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: .git repository access"; http.uri; content:"/.git/"; nocase; classtype:attempted-recon; sid:930020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: .svn repository access"; http.uri; content:"/.svn/"; nocase; classtype:attempted-recon; sid:930021; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: .hg repository access"; http.uri; content:"/.hg/"; nocase; classtype:attempted-recon; sid:930022; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: .env file"; http.uri; content:"/.env"; nocase; pcre:"/\/\.env(?:$|[.?\/])/i"; classtype:attempted-recon; sid:930023; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: .htaccess"; http.uri; content:".htaccess"; nocase; classtype:attempted-recon; sid:930024; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: .htpasswd"; http.uri; content:".htpasswd"; nocase; classtype:attempted-recon; sid:930025; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: web.config"; http.uri; content:"web.config"; nocase; classtype:attempted-recon; sid:930026; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: Java WEB-INF directory"; http.uri; content:"/web-inf/"; nocase; classtype:web-application-attack; sid:930027; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: WordPress wp-config"; http.uri; content:"wp-config"; nocase; classtype:attempted-recon; sid:930028; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: AWS credentials file"; http.uri; content:"/.aws/"; nocase; classtype:web-application-attack; sid:930030; rev:1;)
+
+# --- Traversal forms the path normalizer does not resolve ----------------
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: absolute /etc path in a parameter"; http.uri; content:"=/etc/"; classtype:web-application-attack; sid:930040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: deep directory traversal in the query"; http.uri; content:"../../../"; classtype:web-application-attack; sid:930041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: Windows directory traversal in the query"; http.uri; content:"..|5c|..|5c|"; classtype:web-application-attack; sid:930042; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"LFI: filter bypass traversal (....//)"; http.uri.raw; content:"....//"; classtype:web-application-attack; sid:930043; rev:1;)

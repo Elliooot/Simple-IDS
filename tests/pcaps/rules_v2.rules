@@ -1,0 +1,19 @@
+# Written by tests/regression/gen_pcaps.py for rules_v2.pcap
+# Rule language v2 end to end; run with --var HOME_NET=[10.0.0.0/24].
+var TRUSTED_SCANNERS [10.0.9.0/24]
+alert http any any -> $HOME_NET any (msg:"v2 pcre: UNION SELECT with any whitespace"; \
+    http.uri; content:"union"; nocase; pcre:"/union\s+select/i"; sid:100;)
+alert http any any -> !$HOME_NET any (msg:"v2 variables: never matches, HOME_NET is the server"; \
+    http.uri; content:"union"; nocase; sid:106;)
+alert http any any -> any any (msg:"v2 relative: quote within 10 bytes of id="; \
+    http.uri; content:"id="; content:"'"; distance:0; within:10; sid:101;)
+alert http any any -> any any (msg:"v2 detection_filter: login brute force"; \
+    http.method; content:"POST"; startswith; endswith; http.uri; content:"/login"; \
+    http.request_body; content:"password="; \
+    detection_filter:track by_src, count 3, seconds 60; sid:102;)
+alert http any any -> any any (msg:"v2 threshold: noisy scanner, once a minute"; \
+    http.user_agent; content:"scanbot"; threshold:type limit, track by_src, count 1, seconds 60; sid:103;)
+pass http $TRUSTED_SCANNERS any -> any any (msg:"v2 pass: our own scanner"; \
+    http.user_agent; content:"scanbot"; sid:104;)
+alert tcp any any -> any 21 (msg:"v2 raw: FTP SITE EXEC"; flow:established; \
+    content:"SITE"; startswith; content:"EXEC"; nocase; distance:1; within:5; sid:105;)

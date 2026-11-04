@@ -1,0 +1,44 @@
+# SimpleIDS rule library: PHP injection.
+#
+# Grouped like OWASP CRS REQUEST-933-APPLICATION-ATTACK-PHP. Written for
+# SimpleIDS; samples in tests/rules/samples.py.
+
+# --- Stream wrappers -----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: php://input wrapper"; http.uri; content:"php://input"; nocase; classtype:web-application-attack; sid:933001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: php://filter wrapper"; http.uri; content:"php://filter"; nocase; classtype:web-application-attack; sid:933002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: data:// wrapper"; http.uri; content:"data://"; nocase; classtype:web-application-attack; sid:933003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: phar:// wrapper (deserialization)"; http.uri; content:"phar://"; nocase; classtype:web-application-attack; sid:933004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: iconv filter chain"; http.uri; content:"convert.iconv."; nocase; classtype:web-application-attack; sid:933007; rev:1;)
+
+# --- Dangerous functions -------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: phpinfo()"; http.uri; content:"phpinfo"; nocase; pcre:"/phpinfo\s*\(/i"; classtype:web-application-attack; sid:933010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: eval() in the request target"; http.uri; content:"eval"; nocase; pcre:"/\beval\s*\(/i"; classtype:web-application-attack; sid:933011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: eval() in a request body"; http.request_body; content:"eval"; nocase; pcre:"/\beval\s*\(/i"; classtype:web-application-attack; sid:933012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: assert()"; http.uri; content:"assert"; nocase; pcre:"/\bassert\s*\(/i"; classtype:web-application-attack; sid:933013; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: system() with a string argument"; http.uri; content:"system"; nocase; pcre:"/\bsystem\s*\(\s*['\"$]/i"; classtype:web-application-attack; sid:933014; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: passthru()"; http.uri; content:"passthru"; nocase; classtype:web-application-attack; sid:933015; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: shell_exec()"; http.uri; content:"shell_exec"; nocase; classtype:web-application-attack; sid:933016; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: base64_decode()"; http.uri; content:"base64_decode"; nocase; classtype:web-application-attack; sid:933018; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: gzinflate() (obfuscated payload)"; http.uri; content:"gzinflate"; nocase; classtype:web-application-attack; sid:933019; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: file_put_contents()"; http.uri; content:"file_put_contents"; nocase; classtype:web-application-attack; sid:933023; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: $_GET superglobal in the request target"; http.uri; content:"$_GET["; nocase; classtype:web-application-attack; sid:933024; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: $_POST superglobal in the request target"; http.uri; content:"$_POST["; nocase; classtype:web-application-attack; sid:933026; rev:1;)
+
+# --- Configuration injection (php-cgi argument injection) ----------------
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: allow_url_include override"; http.uri; content:"allow_url_include"; nocase; reference:cve,2012-1823; reference:cve,2024-4577; classtype:web-application-attack; sid:933030; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: auto_prepend_file override"; http.uri; content:"auto_prepend_file"; nocase; classtype:web-application-attack; sid:933031; rev:1;)
+
+# --- Object injection ----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: serialized object in the request target"; http.uri; content:":{s:"; pcre:"/[OC]:\d+:\"[\w\\\\]+\":\d+:\{/"; classtype:web-application-attack; sid:933040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: serialized object in a request body"; http.request_body; content:":{s:"; pcre:"/[OC]:\d+:\"[\w\\\\]+\":\d+:\{/"; classtype:web-application-attack; sid:933041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: serialized object in a cookie"; http.cookie; content:":{s:"; pcre:"/[OC]:\d+:\"[\w\\\\]+\":\d+:\{/"; classtype:web-application-attack; sid:933042; rev:1;)
+
+# --- Code upload and code in unexpected places --------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: upload of a PHP file"; http.request_body; content:"filename"; nocase; pcre:"/filename\s*=\s*\"?[^\"\r\n]*\.(?:php\d?|phtml|phar|pht|phps)\"?/i"; classtype:web-application-attack; sid:933050; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: open tag in a request body"; http.request_body; content:"<?php"; nocase; classtype:web-application-attack; sid:933051; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: short echo tag in a request body"; http.request_body; content:"<?="; classtype:web-application-attack; sid:933052; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: open tag in the User-Agent (log poisoning)"; http.user_agent; content:"<?php"; nocase; classtype:web-application-attack; sid:933054; rev:1;)
+
+# --- Known PHP application exploits -------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: PHPUnit eval-stdin.php"; http.uri; content:"eval-stdin.php"; nocase; reference:cve,2017-9841; classtype:web-application-attack; sid:933060; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PHP: ThinkPHP invokefunction"; http.uri; content:"invokefunction"; nocase; reference:cve,2018-20062; classtype:web-application-attack; sid:933061; rev:1;)

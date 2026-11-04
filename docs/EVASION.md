@@ -6,25 +6,13 @@
 
 | 類別 | 案例數 | 偵測 | 偵測率 |
 |---|---:|---:|---:|
-| URL encoding | 25 | 23 | 92.0% |
+| URL encoding | 27 | 27 | 100.0% |
 | Mixed case | 15 | 15 | 100.0% |
 | Path obfuscation | 24 | 24 | 100.0% |
 | HTTP parameter pollution | 9 | 8 | 88.9% |
-| **合計** | **73** | **70** | **95.9%** |
+| **合計** | **75** | **74** | **98.7%** |
 
 ## 已知漏報
-
-### URL encoding：Encoded tab between UNION and SELECT
-
-- 請求：`GET /?id=1%09UNION%09SELECT%091`
-- 應觸發：2002
-- 原因：規則 2002 比對的是字面字串 'UNION SELECT'，但 SQL 允許兩個關鍵字之間是任何空白字元（tab、換行）或行內註解。需要 Phase 4 的 PCRE2，例如 UNION[\s/*]+SELECT。
-
-### URL encoding：Encoded newline between UNION and SELECT
-
-- 請求：`GET /?id=1%0aUNION%0aSELECT%0a1`
-- 應觸發：2002
-- 原因：規則 2002 比對的是字面字串 'UNION SELECT'，但 SQL 允許兩個關鍵字之間是任何空白字元（tab、換行）或行內註解。需要 Phase 4 的 PCRE2，例如 UNION[\s/*]+SELECT。
 
 ### HTTP parameter pollution：Split comment across query and body (ASP.NET Request.Params)
 
