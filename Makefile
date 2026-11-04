@@ -4,6 +4,7 @@
 #   make test       unit tests + pcap regression tests + evasion report
 #                   + CLI tests (--test-rules, SIGHUP reload)
 #                   + rule library test (one sample per rule, clean corpus)
+#   make bench      throughput with 10 rules vs. all rules (Phase 4 acceptance)
 #   make asan       build and run all tests with AddressSanitizer + UBSan
 #   make pcaps      regenerate tests/pcaps from tests/regression/gen_pcaps.py
 #   make run        build and capture live (sudo)
@@ -63,7 +64,7 @@ MAIN_OBJ := $(MAIN_SRC:%.c=$(BUILD)/%.o)
 TEST_OBJ := $(TEST_SRC:%.c=$(BUILD)/%.o)
 UNIT_BIN := $(BUILD)/unit_tests
 
-.PHONY: all test unit regression evasion cli library asan pcaps run clean
+.PHONY: all test unit regression evasion cli library bench asan pcaps run clean
 
 all: $(BIN)
 
@@ -93,6 +94,9 @@ library: $(BIN)
 	$(PYTHON) tests/rules/test_library.py --bin ./$(BIN)
 
 test: unit regression evasion cli library
+
+bench: $(BIN)
+	$(PYTHON) tests/bench/bench.py --bin ./$(BIN)
 
 asan:
 	$(MAKE) SAN=1 test
