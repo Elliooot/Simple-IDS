@@ -2,7 +2,7 @@
 
 > 狀態：草案 v0.1（2026-11-03）
 > 基準版本：commit `8dbe7c3`（Phase 1 完成）
-> 進度：Phase 2 完成（分支 `phase-2`，2026-11-03）；Phase 1.5 完成（分支 `phase-1.5`）
+> 進度：Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
 > 用途：作為後續開發（含 Claude Code 雲端 session）的單一依據。每完成一項，就在對應的 checkbox 打勾，並註記 commit。
 
 ---
@@ -158,11 +158,18 @@ alert http any any -> $HOME_NET any (
   - 不做 IP 片段重組（IPv4/IPv6 的非首片段直接略過），留給 Phase 5 的規避防護。
 
 ### Phase 3 — 應用層與正規化
-- [ ] HTTP parser 和正規化，提供 `http.*` 比對緩衝區
-- [ ] TLS：SNI、ALPN、JA3、JA4，並辨識 ECH
-- [ ] DNS parser 和網域規則
-- [ ] 規避測試集：URL encoding、大小寫混用、路徑混淆、HTTP 參數污染
+- [x] HTTP parser 和正規化，提供 `http.*` 比對緩衝區（`0a0baaf`：`src/app/http/`。緩衝區 `http.method`、`http.uri`（正規化後）、`http.uri.raw`、`http.header`、`http.user_agent`、`http.host`、`http.cookie`、`http.request_body`；規則可用 `startswith`、`endswith`、`dotprefix`。URI 正規化：absolute-form 去掉 scheme/host、percent-decode 最多 3 輪、`%u`（含全形字元）、overlong UTF-8、`\` 轉 `/`、`//`、`/./`、`..`；query 只解碼不做路徑正規化。Body：Content-Length、chunked、form 解碼。正規化異常 sid 900010–900015。測試：unit `httpnorm`、`test_engine_http_bodies`、回歸 `http_bodies`）
+- [x] TLS：SNI、ALPN、JA3、JA4，並辨識 ECH（`0a0baaf`：ClientHello 可跨多個 TLS record 與 TCP 區段；GREASE 排除；MD5/SHA-256 在 `src/util/digest.c`；ECH（extension `0xfe0d`）發 sid 900030（資訊性）。緩衝區 `tls.sni`、`tls.alpn`、`ja3.hash`、`ja3.string`、`ja4.hash`。測試：unit `test_tls_fingerprints`、`test_tls_ech`；回歸 `tls_fingerprint` 的 JA3/JA4 由 `gen_pcaps.py` 以 Python 獨立計算，交叉驗證 C 實作）
+- [x] DNS parser 和網域規則（`0a0baaf`：`src/app/dns/`，UDP 53 與 TCP 53（長度前綴，可跨區段）；跟隨壓縮指標（最多 16 跳）；`rules/dns.rules` 用 `dns.query; dotprefix; ... endswith` 比對網域與所有子網域；名稱 > 100 或 label > 50 發 sid 900020。測試：unit `dns`、`test_engine_dns`、回歸 `dns`）
+- [x] 規避測試集：URL encoding、大小寫混用、路徑混淆、HTTP 參數污染（`f196c5a`：`tests/evasion/`，73 個案例，`make test` 會跑 `report.py`；結果與漏報原因見 [`docs/EVASION.md`](EVASION.md)）
 - **驗收**：規避測試集的偵測率 ≥ 95%，每一個漏報都要寫明原因並記錄下來。
+  - ✅ 70/73（95.9%）：URL encoding 23/25、大小寫 15/15、路徑 24/24、HPP 8/9。3 個漏報（`UNION%09SELECT`、`UNION%0aSELECT` 需要 Phase 4 的 PCRE2；query 與 body 間的 HPP 需要跨 body 的 transaction 狀態）已記錄在 `docs/EVASION.md`，`report.py` 會在出現未記錄的漏報時失敗。
+- **行為說明與已知限制**
+  - 應用層協定改由內容判斷（`16 03` → TLS、HTTP method → HTTP、port 53 → DNS），不再只看 port，所以 443 上的明文 HTTP、8888 上的 HTTP 都會用 HTTP 規則檢查。無法辨識、也沒有對應 raw `tcp` 規則的串流會立刻停止重組。
+  - `rules/http.rules` 全部改用 sticky buffer：原本比對整個封包的規則拆成 `http.uri`／`http.header`／`http.request_body` 各自的版本（新增 1011、1012、2011、2012、3011；4004 改成 nocase；新增 4005 比對正規化後的 `/Windows/System32/`）。`..` 在路徑裡會被正規化消掉，所以 4001/4002 只會在 query 觸發，爬出根目錄則改由 900010 告警。
+  - 串流有洞時，洞之前的不完整請求會先檢查，之後 HTTP parser 從下一個 request line 重新同步。
+  - 正規化異常（900010–900015）和其他告警一樣以 flow 為單位去重。
+  - 尚未實作：HTTP 回應解析、TLS ServerHello（JA3S/JA4S）、DNS 回應檢查、DGA 熵值啟發式。
 
 ### Phase 4 — 偵測引擎強化
 - [ ] 實作規則語言 v2（§4.2 的內容）

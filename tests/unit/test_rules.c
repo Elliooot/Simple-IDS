@@ -138,7 +138,7 @@ static void test_parse_specials_inside_quotes(void) {
 static void test_parse_rejects_bad_syntax(void) {
     rule_t r;
     CHECK_EQ_INT(parse("drop tcp any any -> any 80 (content:\"x\"; sid:1;)", &r), -1);
-    CHECK_EQ_INT(parse("alert udp any any -> any 80 (content:\"x\"; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert icmp any any -> any 80 (content:\"x\"; sid:1;)", &r), -1);
     CHECK_EQ_INT(parse("alert tcp any any <> any 80 (content:\"x\"; sid:1;)", &r), -1);
     CHECK_EQ_INT(parse("alert tcp any any -> any 70000 (content:\"x\"; sid:1;)", &r), -1);
     CHECK_EQ_INT(parse("alert tcp any any -> any 0 (content:\"x\"; sid:1;)", &r), -1);
@@ -188,19 +188,19 @@ static void test_match_reports_sids(void) {
     size_t n;
     uint8_t *buf = exact_buf("GET /../<SCRIPT> needle", &n);
     g_nhits = 0;
-    CHECK_EQ_INT(rules_match(buf, n, "tcp", 80, collect, NULL), 3);
+    CHECK_EQ_INT(rules_match(buf, n, "tcp", NULL, 80, collect, NULL), 3);
     CHECK_EQ_INT(g_nhits, 3);
     CHECK_EQ_INT(g_hits[0], 1001);
     CHECK_EQ_INT(g_hits[1], 4001);
     CHECK_EQ_INT(g_hits[2], 9);
 
     g_nhits = 0;
-    CHECK_EQ_INT(rules_match(buf, n, "tcp", 443, collect, NULL), 1); /* only "ip any" */
+    CHECK_EQ_INT(rules_match(buf, n, "tcp", NULL, 443, collect, NULL), 1); /* only "ip any" */
     free(buf);
 
     /* A payload that ends right before the match must not hit. */
     buf = exact_buf("GET /<script", &n);
-    CHECK_EQ_INT(rules_match(buf, n, "tcp", 80, NULL, NULL), 0);
+    CHECK_EQ_INT(rules_match(buf, n, "tcp", NULL, 80, NULL, NULL), 0);
     free(buf);
     rules_free();
 }
@@ -245,16 +245,122 @@ static void test_load_file_counts_errors(void) {
 /* The shipped rule files must load without a single error. */
 static void test_repo_rules_load_cleanly(void) {
     rules_free();
-    int e1 = -1, e2 = -1;
-    CHECK(rules_load_file("rules/http.rules", &e1) > 0);
-    CHECK(rules_load_file("rules/tls.rules", &e2) > 0);
-    CHECK_EQ_INT(e1, 0);
-    CHECK_EQ_INT(e2, 0);
+    static const char *const files[] = { "rules/http.rules", "rules/tls.rules",
+                                         "rules/dns.rules", NULL };
+    for (int i = 0; files[i]; i++) {
+        int e = -1;
+        CHECK(rules_load_file(files[i], &e) > 0);
+        CHECK_EQ_INT(e, 0);
+    }
+    rules_free();
+}
+
+/* Phase 3: protocols, sticky buffers and their pairing. */
+static void test_parse_buffers(void) {
+    rule_t r;
+    CHECK_EQ_INT(parse("alert http any any -> any any (http.uri; content:\"a\"; sid:1;)", &r), 1);
+    CHECK_EQ_INT(r.buffer, RULE_BUF_HTTP_URI);
+    CHECK_EQ_INT(parse("alert http any any -> any any (http.uri.raw; content:\"a\"; sid:1;)", &r), 1);
+    CHECK_EQ_INT(r.buffer, RULE_BUF_HTTP_URI_RAW);
+    CHECK_EQ_INT(parse("alert tls any any -> any any (ja3.hash; content:\"ab\"; sid:1;)", &r), 1);
+    CHECK_EQ_INT(r.buffer, RULE_BUF_JA3_HASH);
+    CHECK_EQ_INT(parse("alert tls any any -> any any (ja4.hash; content:\"t13\"; startswith; sid:1;)", &r), 1);
+    CHECK_EQ_INT(r.startswith, 1);
+    CHECK_EQ_INT(parse("alert dns any any -> any any (dns.query; dotprefix; content:\".a.com\"; endswith; sid:1;)", &r), 1);
+    CHECK_EQ_INT(r.buffer, RULE_BUF_DNS_QUERY);
+    CHECK_EQ_INT(r.dotprefix, 1);
+    CHECK_EQ_INT(r.endswith, 1);
+    /* Raw content is allowed for the application protocols too. */
+    CHECK_EQ_INT(parse("alert http any any -> any any (content:\"a\"; sid:1;)", &r), 1);
+    CHECK_EQ_INT(r.buffer, RULE_BUF_RAW);
+    CHECK_EQ_INT(parse("alert udp any any -> any 53 (content:\"a\"; sid:1;)", &r), 1);
+    CHECK_EQ_STR(rule_buffer_name(RULE_BUF_TLS_SNI), "tls.sni");
+}
+
+static void test_parse_buffer_errors(void) {
+    rule_t r;
+    char err[160];
+    /* The buffer must fit the protocol. */
+    CHECK_EQ_INT(rule_parse("alert tcp any any -> any 80 (http.uri; content:\"a\"; sid:1;)",
+                            &r, err, sizeof(err)), -1);
+    CHECK(strstr(err, "needs protocol 'http'") != NULL);
+    CHECK_EQ_INT(parse("alert http any any -> any any (tls.sni; content:\"a\"; sid:1;)", &r), -1);
+    /* Order: buffer, then content, then modifiers. */
+    CHECK_EQ_INT(parse("alert http any any -> any any (content:\"a\"; http.uri; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert http any any -> any any (endswith; http.uri; content:\"a\"; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert dns any any -> any any (dotprefix; dns.query; content:\"a\"; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert dns any any -> any any (content:\"a\"; dotprefix; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert http any any -> any any (http.uri; http.header; content:\"a\"; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert http any any -> any any (http.uri:1; content:\"a\"; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert smtp any any -> any any (content:\"a\"; sid:1;)", &r), -1);
+    CHECK_EQ_INT(parse("alert http any any -> any any (http.nope; content:\"a\"; sid:1;)", &r), -1);
+}
+
+static void test_match_buffer_modifiers(void) {
+    rules_free();
+    add_rule("alert dns any any -> any any (dns.query; dotprefix; content:\".evil.com\"; nocase; endswith; sid:1;)");
+    add_rule("alert dns any any -> any any (dns.query; content:\"www.\"; startswith; sid:2;)");
+    add_rule("alert dns any any -> any any (dns.query; content:\"exact.org\"; startswith; endswith; sid:3;)");
+    add_rule("alert http any any -> any 80 (http.uri; content:\"x\"; sid:4;)");
+
+    static const struct { const char *name; int hits; int first; } cases[] = {
+        { "evil.com", 1, 1 },          /* the domain itself              */
+        { "a.b.EVIL.com", 1, 1 },      /* any subdomain, any case        */
+        { "notevil.com", 0, 0 },       /* not a suffix match             */
+        { "evil.com.example", 0, 0 },  /* must end the name              */
+        { "www.example.net", 1, 2 },
+        { "a.www.example.net", 0, 0 }, /* startswith                     */
+        { "exact.org", 1, 3 },
+        { "exact.org.uk", 0, 0 },
+        { "", 0, 0 },
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        size_t n;
+        uint8_t *buf = exact_buf(cases[i].name, &n);
+        g_nhits = 0;
+        CHECK_EQ_INT(rules_match_buffer(RULE_BUF_DNS_QUERY, buf, n, 53, collect, NULL),
+                     cases[i].hits);
+        if (cases[i].hits) CHECK_EQ_INT(g_hits[0], cases[i].first);
+        free(buf);
+    }
+
+    /* Buffer rules check the port; raw matching ignores buffer rules. */
+    size_t n;
+    uint8_t *buf = exact_buf("/x", &n);
+    CHECK_EQ_INT(rules_match_buffer(RULE_BUF_HTTP_URI, buf, n, 80, NULL, NULL), 1);
+    CHECK_EQ_INT(rules_match_buffer(RULE_BUF_HTTP_URI, buf, n, 8080, NULL, NULL), 0);
+    CHECK_EQ_INT(rules_match_buffer(RULE_BUF_HTTP_HEADER, buf, n, 80, NULL, NULL), 0);
+    CHECK_EQ_INT(rules_match(buf, n, "tcp", "http", 80, NULL, NULL), 0);
+    CHECK_EQ_INT(rules_any_raw("tcp", "http", 80), 0);
+    CHECK_EQ_INT(rules_max_content_len(), 0);
+    free(buf);
+    rules_free();
+}
+
+/* Raw rules: "http" applies to HTTP streams, "tcp" to all TCP, "udp" to UDP. */
+static void test_match_raw_protocols(void) {
+    rules_free();
+    add_rule("alert http any any -> any any (content:\"x\"; sid:1;)");
+    add_rule("alert tcp any any -> any any (content:\"x\"; sid:2;)");
+    add_rule("alert udp any any -> any 53 (content:\"x\"; sid:3;)");
+    size_t n;
+    uint8_t *buf = exact_buf("x", &n);
+    CHECK_EQ_INT(rules_match(buf, n, "tcp", "http", 80, NULL, NULL), 2);
+    CHECK_EQ_INT(rules_match(buf, n, "tcp", "tls", 443, NULL, NULL), 1);
+    CHECK_EQ_INT(rules_match(buf, n, "udp", "dns", 53, NULL, NULL), 1);
+    CHECK_EQ_INT(rules_match(buf, n, "udp", NULL, 54, NULL, NULL), 0);
+    CHECK_EQ_INT(rules_any_raw("tcp", NULL, 22), 1);
+    CHECK_EQ_INT(rules_any_raw("udp", NULL, 54), 0);
+    free(buf);
     rules_free();
 }
 
 const test_case_t rules_tests[] = {
     TEST(test_parse_full_rule),
+    TEST(test_parse_buffers),
+    TEST(test_parse_buffer_errors),
+    TEST(test_match_buffer_modifiers),
+    TEST(test_match_raw_protocols),
     TEST(test_parse_defaults_and_any_port),
     TEST(test_parse_skips_comments_and_blanks),
     TEST(test_parse_overlong_fields),

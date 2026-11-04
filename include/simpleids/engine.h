@@ -23,7 +23,10 @@ typedef struct {
     unsigned long udp;
     unsigned long truncated_payloads;
     unsigned long http_requests;
+    unsigned long http_bodies;        /* request bodies inspected      */
     unsigned long tls_client_hellos;
+    unsigned long tls_ech;            /* hellos with encrypted SNI     */
+    unsigned long dns_queries;        /* questions inspected           */
     unsigned long signature_alerts;
     unsigned long anomaly_alerts;
     unsigned long duplicate_alerts;   /* same sid again in one flow */
@@ -44,7 +47,8 @@ void engine_process_frame(int linktype, const struct timeval *ts,
 /* Inspect an already-decoded packet. */
 void engine_process_packet(const struct timeval *ts, const packet_t *pkt);
 
-/* verbose != 0 prints a line for every clean HTTP request / TLS hello. */
+/* verbose != 0 prints a line for every clean HTTP request, TLS hello
+ * and DNS query. */
 void engine_set_verbose(int verbose);
 
 const engine_stats_t *engine_stats(void);

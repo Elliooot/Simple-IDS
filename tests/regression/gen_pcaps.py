@@ -15,9 +15,12 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))  # tests/
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "evasion"))
 
 from cases import (ANOMALY_CASES, CLEAN_CASES, SIGNATURE_CASES,  # noqa: E402
                    SID_RATE, HttpCase)
+from evasion_cases import CASES as EVASION_CASES  # noqa: E402
+from evasion_cases import BASE_PORT as EVASION_PORT  # noqa: E402
 
 OUT_DIR = os.path.join(os.path.dirname(HERE), "pcaps")
 
@@ -300,8 +303,8 @@ def gen_tls():
     bad = bytearray(client_hello([sni_ext(b"malicious.com")]))
     bad[-len(sni_ext(b"malicious.com")) + 2:-len(sni_ext(b"malicious.com")) + 4] = b"\xff\xff"
     add(44308, bytes(bad))
-    # Not TLS at all on 443.
-    add(44309, b"GET /<script> HTTP/1.1\r\n\r\n")
+    # Not TLS at all on 443: recognized as HTTP by its content (Phase 3).
+    add(44309, b"GET /<script> HTTP/1.1\r\n\r\n", {1001})
     # Large ClientHello (e.g. post-quantum key share) split across TCP
     # segments: the first segment still carries the SNI.
     big = client_hello([sni_ext(b"malicious.com"), tls_ext(51, bytes(1500))])
@@ -332,7 +335,7 @@ def gen_b1_stale_buffer():
     """A big malicious packet followed by a short clean one. libpcap reuses
     its read buffer, so code that runs strstr() past payload_len finds the
     old <script> and blames the second packet."""
-    big = HttpCase("big", "/a", {1001},
+    big = HttpCase("big", "/a", {1012},       # <script> in a header: sid 1012
                    extra_headers="X-Pad: " + "A" * 300 + "<script>\r\n")
     small = b"GET /b HTTP/1.1\r\n\r\n"
     packets = [
@@ -340,7 +343,7 @@ def gen_b1_stale_buffer():
         (T0 + 1, ether(ipv4_tcp("10.0.0.3", SERVER, 46001, 80, small))),
     ]
     emit("b1_stale_buffer", "Matching must stop at payload_len (no NUL terminator)",
-         packets, [alert(1001, 46000)], bugs=["B1"])
+         packets, [alert(1012, 46000)], bugs=["B1"])
 
 
 def gen_b2_truncated():
@@ -488,12 +491,15 @@ def gen_stream_overlap():
 
 def gen_stream_gap():
     """A lost segment: data on both sides is inspected separately, so the
-    pieces around the hole never combine into a false match."""
+    pieces around the hole never combine into a false match. The request
+    cut by the hole is inspected as far as it goes, and the HTTP parser
+    resyncs on the next request line after the hole."""
     tl = Timeline()
     c = Conn(54000)
     seg0 = b"GET /?x=<scr"                              # [0, 12)
     lost = b"XYZ"                                       # [12, 15) never sent
-    seg2 = b"ipt> HTTP/1.1\r\nX: ../\r\n\r\n"            # [15, ...)
+    seg2 = (b"ipt> HTTP/1.1\r\nX: y\r\n\r\n"             # [15, ...)
+            b"GET /?f=../x HTTP/1.1\r\nHost: t\r\n\r\n")
     tl.add(*c.handshake(), c.data(0, seg0), c.data(len(seg0) + len(lost), seg2))
     emit("stream_gap", "No match across a hole; data after it is still inspected",
          tl.packets, [alert(4001, 54000)])
@@ -543,6 +549,212 @@ def gen_ipv6():
          tl.packets, alerts, args=["-f", ""])
 
 
+# --------------------------------------------------------------------------
+# Phase 3: request bodies, DNS, TLS fingerprints
+# --------------------------------------------------------------------------
+
+def gen_http_bodies():
+    tl, alerts = Timeline(), []
+
+    def post(cport, raw, sids, parts=None):
+        c = Conn(cport)
+        tl.add(*c.handshake())
+        cuts = parts or [len(raw)]
+        off = 0
+        for cut in cuts:
+            tl.add(c.data(off, raw[off:cut]))
+            off = cut
+        alerts.extend(alert(s, cport) for s in sids)
+
+    body = b"comment=<script>alert(1)</script>"
+    post(58000, b"POST /c HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+         b"Content-Type: text/plain\r\nContent-Length: %d\r\n\r\n" % len(body) + body, {1011})
+
+    # Chunked, the keywords split across chunks and across TCP segments,
+    # with a chunk extension and a trailer.
+    req = (b"POST /q HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+           b"Transfer-Encoding: chunked\r\n\r\n"
+           b"6;ext=1\r\nq=1 UN\r\n9\r\nION SELEC\r\n3\r\nT 1\r\n0\r\nX-Trailer: y\r\n\r\n")
+    post(58001, req, {2012}, parts=[len(req) - 40, len(req)])
+
+    # Form-encoded body: decoded before matching.
+    body = b"user=%27+OR+1%3D1--&pass=x"
+    post(58002, b"POST /login HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+         b"Content-Type: application/x-www-form-urlencoded\r\n"
+         b"Content-Length: %d\r\n\r\n" % len(body) + body, {2011})
+
+    # Keep-alive: a body that looks like a request is not parsed as one
+    # (no 4001); the real next request's body is inspected (3011).
+    b1 = b"GET /?f=../x HTTP/1.1\r\n\r\n"
+    b2 = b"cmd=/bin/sh"
+    req = (b"POST /a HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+           b"Content-Length: %d\r\n\r\n" % len(b1) + b1 +
+           b"POST /b HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+           b"Content-Length: %d\r\n\r\n" % len(b2) + b2)
+    post(58003, req, {3011})
+
+    # A clean body must stay clean.
+    body = b"name=alice&msg=hello+world"
+    post(58004, b"POST /f HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+         b"Content-Type: application/x-www-form-urlencoded\r\n"
+         b"Content-Length: %d\r\n\r\n" % len(body) + body, set())
+
+    emit("http_bodies", "Request bodies: Content-Length, chunked, form decoding, keep-alive",
+         tl.packets, alerts)
+
+
+def udp_frame(sport, dport, payload, src=CLIENT, dst=SERVER):
+    udp = struct.pack("!HHHH", sport, dport, 8 + len(payload), 0) + payload
+    return ether(ipv4(src, dst, udp, proto=17))
+
+
+def dns_query(name, qid=0x4242, qtype=1, response=False):
+    msg = struct.pack("!HHHHHH", qid, 0x8180 if response else 0x0100, 1, 0, 0, 0)
+    for label in name.split(".") if name else []:
+        msg += bytes([len(label)]) + label.encode()
+    return msg + b"\0" + struct.pack("!HH", qtype, 1)
+
+
+def gen_dns():
+    tl, alerts = Timeline(), []
+
+    def udp(sport, msg, sids=(), dport=53):
+        tl.add(udp_frame(sport, dport, msg))
+        alerts.extend(alert(s, sport, dport) for s in sids)
+
+    udp(59000, dns_query("www.malicious.com"), {8001})
+    udp(59001, dns_query("MALICIOUS.COM"), {8001})               # nocase
+    udp(59002, dns_query("notmalicious.com"))                    # dotprefix
+    udp(59003, dns_query("login.phishing.net", qtype=28), {8002})
+    udp(59004, dns_query("abcdefghij234567.onion"), {8003})
+    udp(59005, dns_query("home.duckdns.org"), {8004})
+    udp(59006, dns_query("www.malicious.com", response=True))   # responses skipped
+    udp(59007, dns_query("www.malicious.com"), dport=5353)       # not DNS port 53
+    # Tunneling-like names: one 60-byte label, and a 120-byte name.
+    udp(59008, dns_query("a" * 60 + ".t.example.com", qtype=16), {900020})
+    udp(59009, dns_query(".".join(["b" * 30] * 4) + ".example.com"), {900020})
+    # Compression pointer in the question (unusual but legal): second
+    # question "x" + pointer to the first name.
+    msg = bytearray(dns_query("phishing.net"))
+    msg[4:6] = b"\x00\x02"
+    msg += b"\x01x\xc0\x0c" + struct.pack("!HH", 1, 1)
+    udp(59010, bytes(msg), {8002})
+    # Malformed: label runs past the end.
+    udp(59011, dns_query("www.malicious.com")[:20])
+
+    # DNS over TCP: two length-prefixed queries, the second one split
+    # across segments.
+    m1 = dns_query("example.com")
+    m2 = dns_query("c2.duckdns.org", qid=7)
+    stream = struct.pack("!H", len(m1)) + m1 + struct.pack("!H", len(m2)) + m2
+    c = Conn(59100, sport=53)
+    cut = len(m1) + 2 + 7
+    tl.add(*c.handshake(), c.data(0, stream[:cut]), c.data(cut, stream[cut:]))
+    alerts.append(alert(8004, 59100, 53))
+
+    emit("dns", "DNS queries over UDP and TCP: domain rules and long-name anomaly",
+         tl.packets, alerts)
+
+
+GREASE = 0x0A0A
+
+
+def hello_full(sni=None, alpn=(), ech=False, records=1):
+    """A ClientHello with GREASE values, groups, point formats, ALPN and
+    signature algorithms. Returns (record bytes, ja3 string, ja4)."""
+    import hashlib
+
+    suites = [GREASE, 0x1301, 0x1302, 0xC02F]
+    exts = [(0x1A1A, b"")]
+    if sni:
+        exts.append((0, sni_ext(sni)[4:]))
+    groups = [0x2A2A, 29, 23]
+    exts.append((10, struct.pack("!H", 2 * len(groups)) + b"".join(struct.pack("!H", g) for g in groups)))
+    exts.append((11, b"\x01\x00"))
+    if alpn:
+        lst = b"".join(bytes([len(p)]) + p for p in alpn)
+        exts.append((16, struct.pack("!H", len(lst)) + lst))
+    sigs = [0x0403, 0x0804, 0x0401]
+    exts.append((13, struct.pack("!H", 2 * len(sigs)) + b"".join(struct.pack("!H", s) for s in sigs)))
+    exts.append((43, b"\x06" + struct.pack("!HHH", 0x3A3A, 0x0304, 0x0303)))
+    if ech:
+        exts.append((0xFE0D, b"\x00\x00\x01\x00\x01\x42\x00\x00\x00\x00"))
+
+    body = b"\x03\x03" + bytes(range(32)) + b"\x00"
+    body += struct.pack("!H", 2 * len(suites)) + b"".join(struct.pack("!H", s) for s in suites)
+    body += b"\x01\x00"
+    blob = b"".join(struct.pack("!HH", t, len(d)) + d for t, d in exts)
+    body += struct.pack("!H", len(blob)) + blob
+    hs = b"\x01" + struct.pack("!I", len(body))[1:] + body
+    # Split the handshake message over `records` TLS records.
+    step = -(-len(hs) // records)
+    rec = b"".join(b"\x16\x03\x01" + struct.pack("!H", len(hs[i:i + step])) + hs[i:i + step]
+                   for i in range(0, len(hs), step))
+
+    # Independent JA3 / JA4 computation, to cross-check src/app/tls/tls.c.
+    def grease(v):
+        return (v & 0x0F0F) == 0x0A0A and (v >> 8) == (v & 0xFF)
+    cs = [s for s in suites if not grease(s)]
+    et = [t for t, _ in exts if not grease(t)]
+    ja3 = "771,%s,%s,%s,0" % ("-".join(map(str, cs)), "-".join(map(str, et)),
+                              "-".join(str(g) for g in groups if not grease(g)))
+    first = alpn[0].decode() if alpn else ""
+    a = "t13%s%02d%02d%s" % ("d" if sni else "i", len(cs), len(et),
+                             first[0] + first[-1] if first else "00")
+    b = hashlib.sha256(",".join("%04x" % s for s in sorted(cs)).encode()).hexdigest()[:12]
+    c_in = ",".join("%04x" % t for t in sorted(et) if t not in (0, 16))
+    c_in += "_" + ",".join("%04x" % s for s in sigs)
+    c = hashlib.sha256(c_in.encode()).hexdigest()[:12]
+    return rec, ja3, f"{a}_{b}_{c}"
+
+
+def gen_tls_fingerprint():
+    """JA3/JA4/ALPN rules from a rules file written next to the pcap. The
+    expected fingerprints are computed here in Python, independently of
+    the C code, so a wrong fingerprint shows up as a missing alert."""
+    import hashlib
+
+    tl, alerts = Timeline(), []
+    rec, ja3, ja4 = hello_full(b"api.example.org", (b"h2", b"http/1.1"))
+    ja3_md5 = hashlib.md5(ja3.encode()).hexdigest()
+    rules_path = os.path.join(OUT_DIR, "tls_fingerprint.rules")
+    with open(rules_path, "w") as f:
+        f.write("# Written by tests/regression/gen_pcaps.py for tls_fingerprint.pcap\n")
+        f.write(f"# JA3 string: {ja3}\n")
+        for sid, buf, content, extra in (
+                (7101, "ja3.hash", ja3_md5, ""),
+                (7102, "ja4.hash", ja4, ""),
+                (7103, "tls.alpn", "h2,http/1.1", " startswith; endswith;"),
+                (7104, "ja3.string", ja3.split(",")[0] + "," + ja3.split(",")[1] + ",", " startswith;"),
+        ):
+            f.write(f'alert tls any any -> any any (msg:"test {buf}"; {buf}; content:"{content}";'
+                    f'{extra} sid:{sid}; priority:3;)\n')
+
+    def conn(cport, record, sids, segments=1):
+        c = Conn(cport, sport=443)
+        tl.add(*c.handshake())
+        step = -(-len(record) // segments)
+        for off in range(0, len(record), step):
+            tl.add(c.data(off, record[off:off + step]))
+        alerts.extend(alert(s, cport, 443) for s in sids)
+
+    every = {7101, 7102, 7103, 7104}
+    conn(44400, rec, every)
+    # Same hello over 3 TLS records and 4 TCP segments.
+    rec3, ja3_3, ja4_3 = hello_full(b"api.example.org", (b"h2", b"http/1.1"), records=3)
+    assert (ja3_3, ja4_3) == (ja3, ja4)
+    conn(44401, rec3, every, segments=4)
+    # A different SNI changes neither JA3 nor JA4 (SNI is excluded from JA4_c).
+    conn(44402, hello_full(b"other.example.net", (b"h2", b"http/1.1"))[0], every)
+    # No SNI: JA4 says 'i' and drops one extension; JA3 loses extension 0.
+    conn(44403, hello_full(None, (b"h2", b"http/1.1"))[0], {7103, 7104})
+    # ECH (extension 0xfe0d): different fingerprints, informational alert.
+    conn(44404, hello_full(b"cover.example.org", (b"h2",), ech=True)[0], {7104, 900030})
+
+    emit("tls_fingerprint", "JA3, JA4, ALPN and ECH from reassembled ClientHellos",
+         tl.packets, alerts, args=["-R", "tests/pcaps/tls_fingerprint.rules"])
+
+
 def gen_flow_eviction():
     """With room for only 2 flows, a third evicts the least recently used.
     The evicted flow is inspected before it is dropped."""
@@ -556,6 +768,19 @@ def gen_flow_eviction():
     alerts.append(alert(1001, 57001))
     emit("flow_eviction", "Bounded flow table: LRU eviction flushes the evicted flow",
          tl.packets, alerts, args=["--max-flows", "2"])
+
+
+def gen_evasion():
+    """tests/evasion/evasion_cases.py: one connection per case. Documented
+    misses expect only their extra sids; report.py turns the same run into
+    per-category detection rates."""
+    tl, alerts = Timeline(), []
+    for i, case in enumerate(EVASION_CASES):
+        c = Conn(EVASION_PORT + i)
+        tl.add(*c.handshake(), c.data(0, case.request()))
+        alerts += [alert(sid, EVASION_PORT + i) for sid in sorted(case.expected())]
+    emit("evasion", "Evasion test set: URL encoding, mixed case, path obfuscation, HPP",
+         tl.packets, alerts)
 
 
 def main():
@@ -577,6 +802,10 @@ def main():
     gen_vlan()
     gen_ipv6()
     gen_flow_eviction()
+    gen_http_bodies()
+    gen_dns()
+    gen_tls_fingerprint()
+    gen_evasion()
 
 
 if __name__ == "__main__":

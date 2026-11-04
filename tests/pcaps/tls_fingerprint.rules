@@ -1,0 +1,6 @@
+# Written by tests/regression/gen_pcaps.py for tls_fingerprint.pcap
+# JA3 string: 771,4865-4866-49199,0-10-11-16-13-43,29-23,0
+alert tls any any -> any any (msg:"test ja3.hash"; ja3.hash; content:"c1a43d8d2c56daaba91e8d85f5768f55"; sid:7101; priority:3;)
+alert tls any any -> any any (msg:"test ja4.hash"; ja4.hash; content:"t13d0306h2_40b44b994229_0d385148b956"; sid:7102; priority:3;)
+alert tls any any -> any any (msg:"test tls.alpn"; tls.alpn; content:"h2,http/1.1"; startswith; endswith; sid:7103; priority:3;)
+alert tls any any -> any any (msg:"test ja3.string"; ja3.string; content:"771,4865-4866-49199,"; startswith; sid:7104; priority:3;)

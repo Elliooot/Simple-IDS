@@ -1,0 +1,60 @@
+{
+  "description": "DNS queries over UDP and TCP: domain rules and long-name anomaly",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 8001,
+      "src_ip": "10.0.0.2",
+      "src_port": 59000,
+      "dest_port": 53
+    },
+    {
+      "sid": 8001,
+      "src_ip": "10.0.0.2",
+      "src_port": 59001,
+      "dest_port": 53
+    },
+    {
+      "sid": 8002,
+      "src_ip": "10.0.0.2",
+      "src_port": 59003,
+      "dest_port": 53
+    },
+    {
+      "sid": 8003,
+      "src_ip": "10.0.0.2",
+      "src_port": 59004,
+      "dest_port": 53
+    },
+    {
+      "sid": 8004,
+      "src_ip": "10.0.0.2",
+      "src_port": 59005,
+      "dest_port": 53
+    },
+    {
+      "sid": 900020,
+      "src_ip": "10.0.0.2",
+      "src_port": 59008,
+      "dest_port": 53
+    },
+    {
+      "sid": 900020,
+      "src_ip": "10.0.0.2",
+      "src_port": 59009,
+      "dest_port": 53
+    },
+    {
+      "sid": 8002,
+      "src_ip": "10.0.0.2",
+      "src_port": 59010,
+      "dest_port": 53
+    },
+    {
+      "sid": 8004,
+      "src_ip": "10.0.0.2",
+      "src_port": 59100,
+      "dest_port": 53
+    }
+  ]
+}

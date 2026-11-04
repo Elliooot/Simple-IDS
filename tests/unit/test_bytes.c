@@ -1,4 +1,5 @@
 #include "simpleids/bytes.h"
+#include "simpleids/digest.h"
 #include "simpleids/siphash.h"
 #include "test.h"
 
@@ -70,6 +71,31 @@ static void test_random_bytes(void) {
     CHECK(memcmp(a, b, sizeof(a)) != 0);
 }
 
+/* RFC 1321 / FIPS 180-4 vectors, plus lengths around the padding edge. */
+static void test_digests(void) {
+    static const struct { const char *in, *md5, *sha; } v[] = {
+        { "", "d41d8cd98f00b204e9800998ecf8427e",
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" },
+        { "abc", "900150983cd24fb0d6963f7d28e17f72",
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" },
+        { "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+          "8215ef0796a20bcaaae116d3876c664a",
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1" },
+    };
+    for (size_t i = 0; i < sizeof(v) / sizeof(v[0]); i++) {
+        size_t n;
+        uint8_t *in = exact_buf(v[i].in, &n), d[32];
+        char hex[65];
+        md5(in, n, d);
+        digest_hex(d, MD5_LEN, hex);
+        CHECK_EQ_STR(hex, v[i].md5);
+        sha256(in, n, d);
+        digest_hex(d, SHA256_LEN, hex);
+        CHECK_EQ_STR(hex, v[i].sha);
+        free(in);
+    }
+}
+
 const test_case_t bytes_tests[] = {
     TEST(test_find_does_not_read_past_len),
     TEST(test_find_basic),
@@ -79,5 +105,6 @@ const test_case_t bytes_tests[] = {
     TEST(test_read_be_unaligned),
     TEST(test_siphash_vectors),
     TEST(test_random_bytes),
+    TEST(test_digests),
     TEST_END
 };

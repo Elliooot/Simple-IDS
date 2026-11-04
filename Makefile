@@ -1,7 +1,7 @@
 # SimpleIDS build
 #
 #   make            build ./SimpleIDS
-#   make test       unit tests + pcap regression tests
+#   make test       unit tests + pcap regression tests + evasion report
 #   make asan       build and run all tests with AddressSanitizer + UBSan
 #   make pcaps      regenerate tests/pcaps from tests/regression/gen_pcaps.py
 #   make run        build and capture live (sudo)
@@ -33,11 +33,13 @@ endif
 
 LIB_SRC := src/util/bytes.c \
            src/util/siphash.c \
+           src/util/digest.c \
            src/decode/decode.c \
            src/flow/flow.c \
            src/stream/stream.c \
            src/app/http/http.c \
            src/app/tls/tls.c \
+           src/app/dns/dns.c \
            src/detect/rules.c \
            src/anomaly/anomaly.c \
            src/output/output.c \
@@ -50,7 +52,7 @@ MAIN_OBJ := $(MAIN_SRC:%.c=$(BUILD)/%.o)
 TEST_OBJ := $(TEST_SRC:%.c=$(BUILD)/%.o)
 UNIT_BIN := $(BUILD)/unit_tests
 
-.PHONY: all test unit regression asan pcaps run clean
+.PHONY: all test unit regression evasion asan pcaps run clean
 
 all: $(BIN)
 
@@ -70,7 +72,10 @@ unit: $(UNIT_BIN)
 regression: $(BIN)
 	$(PYTHON) tests/regression/run.py --bin ./$(BIN)
 
-test: unit regression
+evasion: $(BIN)
+	$(PYTHON) tests/evasion/report.py --bin ./$(BIN)
+
+test: unit regression evasion
 
 asan:
 	$(MAKE) SAN=1 test

@@ -11,7 +11,16 @@
 #define ANOMALY_SID_LONG_URL   900002
 #define ANOMALY_SID_SHORT_UA   900003
 #define ANOMALY_SID_BAD_UA     900004
-#define ANOMALY_SID_STREAM_OVERLAP 900005 /* raised by the engine */
+/* Raised by the engine, at most once per flow: */
+#define ANOMALY_SID_STREAM_OVERLAP       900005
+#define ANOMALY_SID_HTTP_TRAVERSAL       900010 /* ".." above the root   */
+#define ANOMALY_SID_HTTP_DOUBLE_ENCODING 900011
+#define ANOMALY_SID_HTTP_U_ENCODING      900012 /* %uXXXX                */
+#define ANOMALY_SID_HTTP_OVERLONG_UTF8   900013
+#define ANOMALY_SID_HTTP_HPP             900014 /* split SQL comment     */
+#define ANOMALY_SID_HTTP_NUL             900015
+#define ANOMALY_SID_DNS_LONG_NAME        900020 /* possible tunneling    */
+#define ANOMALY_SID_TLS_ECH              900030 /* informational         */
 
 #define ANOMALY_MAX_IPS        1024 /* rate table size (LRU eviction)  */
 #define ANOMALY_RATE_WINDOW    60   /* seconds                          */

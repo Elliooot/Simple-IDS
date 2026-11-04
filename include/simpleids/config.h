@@ -11,7 +11,7 @@
 #endif
 
 #define DEFAULT_RULES_GLOB "rules/*.rules"
-#define BPF_FILTER         "tcp port 80 or tcp port 443 or tcp port 8080"
+#define BPF_FILTER         "tcp port 80 or tcp port 443 or tcp port 8080 or port 53"
 #define SNAPLEN            65535
 
 #endif

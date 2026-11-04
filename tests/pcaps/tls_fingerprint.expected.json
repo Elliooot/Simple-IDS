@@ -1,0 +1,106 @@
+{
+  "description": "JA3, JA4, ALPN and ECH from reassembled ClientHellos",
+  "bugs": [],
+  "alerts": [
+    {
+      "sid": 7101,
+      "src_ip": "10.0.0.2",
+      "src_port": 44400,
+      "dest_port": 443
+    },
+    {
+      "sid": 7102,
+      "src_ip": "10.0.0.2",
+      "src_port": 44400,
+      "dest_port": 443
+    },
+    {
+      "sid": 7103,
+      "src_ip": "10.0.0.2",
+      "src_port": 44400,
+      "dest_port": 443
+    },
+    {
+      "sid": 7104,
+      "src_ip": "10.0.0.2",
+      "src_port": 44400,
+      "dest_port": 443
+    },
+    {
+      "sid": 7101,
+      "src_ip": "10.0.0.2",
+      "src_port": 44401,
+      "dest_port": 443
+    },
+    {
+      "sid": 7102,
+      "src_ip": "10.0.0.2",
+      "src_port": 44401,
+      "dest_port": 443
+    },
+    {
+      "sid": 7103,
+      "src_ip": "10.0.0.2",
+      "src_port": 44401,
+      "dest_port": 443
+    },
+    {
+      "sid": 7104,
+      "src_ip": "10.0.0.2",
+      "src_port": 44401,
+      "dest_port": 443
+    },
+    {
+      "sid": 7101,
+      "src_ip": "10.0.0.2",
+      "src_port": 44402,
+      "dest_port": 443
+    },
+    {
+      "sid": 7102,
+      "src_ip": "10.0.0.2",
+      "src_port": 44402,
+      "dest_port": 443
+    },
+    {
+      "sid": 7103,
+      "src_ip": "10.0.0.2",
+      "src_port": 44402,
+      "dest_port": 443
+    },
+    {
+      "sid": 7104,
+      "src_ip": "10.0.0.2",
+      "src_port": 44402,
+      "dest_port": 443
+    },
+    {
+      "sid": 7103,
+      "src_ip": "10.0.0.2",
+      "src_port": 44403,
+      "dest_port": 443
+    },
+    {
+      "sid": 7104,
+      "src_ip": "10.0.0.2",
+      "src_port": 44403,
+      "dest_port": 443
+    },
+    {
+      "sid": 7104,
+      "src_ip": "10.0.0.2",
+      "src_port": 44404,
+      "dest_port": 443
+    },
+    {
+      "sid": 900030,
+      "src_ip": "10.0.0.2",
+      "src_port": 44404,
+      "dest_port": 443
+    }
+  ],
+  "args": [
+    "-R",
+    "tests/pcaps/tls_fingerprint.rules"
+  ]
+}

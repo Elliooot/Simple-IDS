@@ -40,7 +40,8 @@ typedef enum {
     APP_UNKNOWN = 0,       /* not decided yet                          */
     APP_HTTP,
     APP_TLS,
-    APP_NONE               /* not inspected                            */
+    APP_DNS,
+    APP_NONE               /* no parser (raw rules may still apply)    */
 } app_proto_t;
 
 #define FLOW_MAX_ALERT_SIDS 16
@@ -53,8 +54,17 @@ typedef struct {
     uint8_t  overlap_alerted;
     uint32_t scan_pos;         /* stream offset scanned by rules so far */
     uint32_t seg_start;        /* start of the current gap-free region */
-    uint32_t req_start;        /* HTTP: offset of the next request     */
-    uint32_t hdr_scan;         /* HTTP: resume point for CRLFCRLF       */
+    uint8_t  raw_scan;         /* raw-content rules apply to the stream */
+    uint8_t  parser_done;      /* the app-layer parser has finished    */
+    uint8_t  http_state;       /* HTTP: 0 headers, 1 body, 2 resync    */
+    uint8_t  body_chunked;     /* HTTP: current body is chunked        */
+    uint8_t  body_form;        /* HTTP: body is form-urlencoded        */
+    uint32_t req_start;        /* HTTP/DNS: offset of the next message */
+    uint32_t hdr_scan;         /* HTTP: resume point for CRLFCRLF or
+                                  for the resync search               */
+    uint32_t data_end;         /* end of the data handed to parsers    */
+    uint32_t body_start;       /* HTTP: first body byte                */
+    uint32_t body_end;         /* HTTP: end of a Content-Length body   */
     uint8_t  nsids;
     int      sids[FLOW_MAX_ALERT_SIDS]; /* sids already alerted        */
 } flow_app_t;
