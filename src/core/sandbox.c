@@ -231,6 +231,7 @@ int sandbox_enter(char *err, size_t errlen) {
 /* ------------------------------------------------------------------ */
 #elif defined(__APPLE__)
 
+#ifndef SANITIZER_BUILD
 /* Declared here rather than through <sandbox.h>, which marks the API as
  * deprecated. It is still what Chrome and Apple's own daemons use. */
 int  sandbox_init(const char *profile, uint64_t flags, char **errorbuf);
@@ -244,6 +245,7 @@ static const char PROFILE[] =
     "(deny network*)"
     "(deny process-exec*)"
     "(deny process-fork)";
+#endif
 
 int sandbox_enter(char *err, size_t errlen) {
 #ifdef SANITIZER_BUILD
