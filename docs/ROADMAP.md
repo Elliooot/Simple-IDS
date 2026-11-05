@@ -2,7 +2,7 @@
 
 > 狀態：草案 v0.1（2026-11-03）
 > 基準版本：commit `8dbe7c3`（Phase 1 完成）
-> 進度：Phase 4 完成（分支 `phase-4`，2026-11-04）；Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
+> 進度：Phase 5 完成（分支 `phase-5`，2026-11-05；24 小時 fuzz 驗收由 nightly workflow 累積中）；Phase 4 完成（分支 `phase-4`，2026-11-04）；Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
 > 用途：作為後續開發（含 Claude Code 雲端 session）的單一依據。每完成一項，就在對應的 checkbox 打勾，並註記 commit。
 
 ---
@@ -192,13 +192,22 @@ alert http any any -> $HOME_NET any (
   - JSON log 的 `proto` 原本固定寫 `TCP`，現在依實際協定輸出；`alert` 物件多了 `action`、`rev`、`category`。
 
 ### Phase 5 — 穩健性與維運
-- [ ] 用 libFuzzer 為 decoder、HTTP、TLS、DNS、規則 parser 各寫一個 fuzz target，並放進 CI 跑短時間的 smoke 測試
-- [ ] 降權：開啟裝置後 `setuid`/`setgid`；Linux 加上 seccomp，macOS 研究 sandbox
-- [ ] 編譯強化：`-D_FORTIFY_SOURCE=3`、`-fstack-protector-strong`、PIE、RELRO
-- [ ] 設定檔（INI 或 YAML 子集），並支援 log 輪替
-- [ ] 統計輸出：pps、丟包率、flow 數、記憶體用量
-- [ ] 效能基準測試：`make bench` 跑固定的 pcap，輸出 Mbps（Phase 4 已有 `make bench` 比較 10 條與全部規則的吞吐量；還缺每封包延遲與記憶體高峰）
+- [x] 用 libFuzzer 為 decoder、HTTP、TLS、DNS、規則 parser 各寫一個 fuzz target，並放進 CI 跑短時間的 smoke 測試（`535d1c1`：`tests/fuzz/` 共 7 個 target：`decode`（所有 link type）、`http`、`tls`、`dns`、`rules`（解析 → 編譯 → lint → 用輸入本身評估每個 buffer）、`engine`（多個 frame 走完整條 pipeline，含重組與 flow 淘汰）、`config`。`make fuzz`（clang + libFuzzer + ASan/UBSan，`FUZZ_TIME`／`FUZZ_JOBS`）；`make fuzz-replay` 用一般編譯器重播種子與 `tests/fuzz/regressions/`，是 `make test` 的一部分；種子由 `make_seeds.py` 從回歸 pcap、規則庫樣本、規則檔、設定檔產生，另有 HTTP／規則／設定的字典。CI 的 `fuzz-smoke` job 每個 target 跑 45 秒，`.github/workflows/fuzz.yml` 每晚每個 target 跑 3 小時並累計 CPU 時數、保存 corpus。**fuzz 找到一個真的 bug**：`http_check_params` 在參數名稱超過 `HPP_NAME_MAX` 時越界讀取（`55de180`，unit `test_hpp_long_name`、`regressions/http/hpp-long-name`））
+- [x] 降權：開啟裝置後 `setuid`/`setgid`；Linux 加上 seccomp，macOS 研究 sandbox（`535d1c1`、`864549d`：`-u USER`／`-g GROUP`（或設定檔 `security.user`／`group`），在開好擷取裝置、BPF、log、規則與引擎之後才 `setgroups` → `setgid` → `setuid`，並確認 `setuid(0)` 會失敗；log 檔會先 `fchown` 給新使用者。接著進入 sandbox（`--no-sandbox` 或 `security.sandbox = no` 關閉）：Linux 是手寫的 seccomp-BPF allowlist（56 個 syscall，檢查 arch、擋 x32，`ioctl` 只允許 `TCGETS`，不允許 socket／exec／fork／ptrace），`PR_SET_NO_NEW_PRIVS`，違規時 `SECCOMP_RET_TRAP` 並印出 syscall 編號後以 159 結束；macOS 用 `sandbox_init` 的 SBPL profile 禁止網路、exec 與 fork（檔案系統仍可讀寫，因為 SIGHUP 要重讀規則、log 要輪替）。測試：unit `sandbox`（fork 子程序驗證 `socket()`／`exec` 被殺、檔案 I/O 與 rename 正常）、`priv_resolve`／`priv_drop`；以 nobody 實際監聽 `lo` 做過 live 測試）
+- [x] 編譯強化：`-D_FORTIFY_SOURCE=3`、`-fstack-protector-strong`、PIE、RELRO（`535d1c1`：另外有編譯器支援時加 `-fstack-clash-protection`、`-fcf-protection=full`；Linux 連結 `-pie -z relro -z now -z noexecstack`；`HARDEN=0` 可關閉。`make hardening`（`tests/hardening/check.py`）用 readelf／otool 檢查 PIE、full RELRO、NX stack、stack protector、`*_chk` 呼叫，CI 每個建置都會跑；sanitizer 建置不開 FORTIFY）
+- [x] 設定檔（INI 或 YAML 子集），並支援 log 輪替（`535d1c1`：`-c FILE`，INI 子集，`[capture]`／`[rules]`／`[vars]`／`[output]`／`[engine]`／`[security]`，範例與所有預設值在 `etc/simpleids.conf`。優先順序：內建預設 < 設定檔 < 命令列；每個設定都有 `section.key` 名稱，設定檔和命令列都經過同一個 `settings_set()` 驗證；未知的 section／key 是錯誤，所有錯誤以 `檔案:行號` 列出。輸入視為不可信：單行 ≤ 4096 bytes、檔案 ≤ 1 MB。log 依大小輪替：`--log-max-size`／`--log-max-files`，`ids.log` → `ids.log.1` … `.N`；rename 失敗時繼續寫並在下一個門檻重試。SIGHUP 也會重新開啟 log（配合外部 logrotate），新檔開不了就保留舊的。測試：unit `settings`、`test_cli.py` 的 config 與 rotation 情境、fuzz target `config`）
+- [x] 統計輸出：pps、丟包率、flow 數、記憶體用量（`535d1c1`：`--stats-interval S` 每 S 秒（`-r` 用封包時間，live 用實際時間）在 log 寫一筆 EVE 風格的 `event_type:"stats"`，結束時再寫一筆；SIGUSR1 隨時寫一筆。內容：封包／bytes、區間 pps 與 Mbps、live 擷取的 `kernel_received`／`kernel_drops`／`if_drops`／`drop_rate`（`pcap_stats`）、decoder 計數、flow（active／peak／created／timed_out／evicted／table_bytes）、重組記憶體（目前／高峰／memcap）、應用層與偵測計數、`rss_peak_bytes`、log 輪替計數；`--measure-latency` 時另有每封包延遲的百分位數）
+- [x] 效能基準測試：`make bench` 跑固定的 pcap，輸出 Mbps（`535d1c1`、`9d59969`：`tests/bench/bench.py` 新增 `--measure-latency` 量每封包延遲（直方圖，每 2 倍再分 8 格，avg／p50／p99／p99.9／max）與 `wait4` 量 peak RSS，RSS > 256 MB 就失敗；500 Mbit/s 目標只顯示不判定（雲端機器速度浮動）。callgrind 找到兩個熱點並優化（`9d59969`）：異常偵測的頻率表從線性 `strcmp` 掃描改成 SipHash 雜湊加 O(1) LRU，IPv4 位址字串不再經過 `inet_ntop`／`sprintf`，告警輸出逐 byte 相同）
 - **驗收**：每個 fuzz target 累積 ≥ 24 小時沒有 crash，達到 §3.3 的效能目標。
+  - ✅ 效能：`make bench`（release 建置，5 次取最快）10 條規則 802 Mbit/s、300 條規則 **670 Mbit/s**（下降 16.5%）；同一台機器同時間對照，Phase 4 為 448–457 Mbit/s、Phase 5 優化前 440–444 Mbit/s、優化後 624–705 Mbit/s，所以強化旗標與 seccomp 的成本在雜訊範圍內。每封包延遲 avg 2.0 µs、p50 144 ns、p99 15.4 µs、p99.9 32.8 µs。記憶體：peak RSS **79.6 MiB**（預設 65536 flows + 64 MB memcap，上限 256 MB）。
+  - ⏳ fuzz 24 小時：本機 6 個 target 平行各跑 20 分鐘無 crash（decode 2.6 億次、dns 4.1 億次、tls 5470 萬次、http 500 萬次、rules 190 萬次、engine 178 萬次）；CI smoke 每次 push 跑。24 小時由 `fuzz.yml` nightly（每 target 每晚 3 小時，job summary 顯示累計 CPU 時數）累積，約 8 個晚上達標。
+- **行為說明與已知限制**
+  - sanitizer 建置（`make asan`）不進 seccomp，因為 LSan 需要 ptrace／clone；macOS ASan 同樣跳過 sandbox。
+  - 降權後 log 輪替需要 log 所在目錄對新使用者可寫（rename 和建新檔都在目錄層級）；不可寫時會繼續寫原檔並計入 `rotate_errors`。SIGHUP 重讀規則時，規則檔也必須對新使用者可讀。
+  - 統計輸出預設關閉（`--stats-interval 0`），只有 SIGUSR1 或設定後才寫。
+  - `-R` 會取代設定檔裡的 `rules.path`，不是附加。
+  - live 擷取改用 `pcap_dispatch` 迴圈（才能定時寫 stats 和處理訊號）；只有 live 擷取且仍是 root 時才警告「以 root 執行」。
+  - seccomp allowlist 是針對 glibc + libpcap 的實際呼叫手動整理的；換 libc（例如 musl）或新版 libpcap 若用到新的 syscall，會以 159 結束並印出 syscall 編號，屆時再加進清單或用 `--no-sandbox`。
 
 ### Phase 6 — 進階選配（依興趣挑選）
 - [ ] **多執行緒**：依 flow hash 把封包分給多個 worker，每個 worker 有自己的 flow table

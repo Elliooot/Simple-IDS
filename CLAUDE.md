@@ -3,17 +3,19 @@
 以 C + libpcap 撰寫的教學用網路入侵偵測系統（NIDS）。
 
 - **規格與發展計畫**：@docs/ROADMAP.md（開始任何工作前先讀；完成項目要回頭勾選，並註記 commit）
-- **目前進度**：Phase 4 完成（規則語言 v2、Aho-Corasick 預過濾 + PCRE2、threshold/detection_filter、SIGHUP 原子重載、`--test-rules`、300 條規則、規避測試集 98.7%、300 vs 10 條規則吞吐量只降 8.5%），接下來是 Phase 5（穩健性與維運）
+- **目前進度**：Phase 5 完成（libFuzzer 7 個 target + CI smoke + nightly、降權 + seccomp／macOS sandbox、編譯強化（FORTIFY=3、PIE、full RELRO）、INI 設定檔、log 輪替、stats 事件、bench 加入每封包延遲與 peak RSS；300 條規則 670 Mbit/s、RSS 80 MiB），接下來是 Phase 6（進階選配）；Phase 5 的「每個 fuzz target 累積 24 小時」由 `.github/workflows/fuzz.yml` nightly 累積中
 - **溝通語言**：回覆使用繁體中文
 
 ## 建置與執行
 - `make`：建置 `./SimpleIDS`，需要 libpcap 和 PCRE2（Ubuntu：`libpcap-dev libpcre2-dev pkg-config`；macOS：`brew install pcre2`）
-- `make test`：單元測試 + pcap 回歸測試 + 規避測試集報告（`tests/evasion/report.py`，偵測率 < 95% 或有未記錄的漏報就失敗）+ CLI 測試（`tests/cli/test_cli.py`：`--test-rules`、SIGHUP 重載）+ 規則庫測試（`tests/rules/test_library.py`：每條 `rules/crs/` 規則都要命中自己的樣本，正常流量語料不能有任何告警）；`make asan`：用 ASan/UBSan 建置並跑全部測試；`make pcaps`：重新產生 `tests/pcaps/`；`make bench`：10 條 vs 全部規則的吞吐量比較（掉 ≥ 30% 就失敗）
+- `make test`：單元測試 + pcap 回歸測試 + 規避測試集報告（`tests/evasion/report.py`，偵測率 < 95% 或有未記錄的漏報就失敗）+ CLI 測試（`tests/cli/test_cli.py`：`--test-rules`、SIGHUP 重載）+ 規則庫測試（`tests/rules/test_library.py`：每條 `rules/crs/` 規則都要命中自己的樣本，正常流量語料不能有任何告警）；`make asan`：用 ASan/UBSan 建置並跑全部測試；`make pcaps`：重新產生 `tests/pcaps/`；`make bench`：10 條 vs 全部規則的吞吐量比較（掉 ≥ 30% 就失敗），另外量每封包延遲與 peak RSS（> 256 MB 就失敗）
+- Fuzz：`make fuzz`（需要 clang 與 libFuzzer runtime，Ubuntu：`clang libclang-rt-18-dev`；`FUZZ_TIME=秒數`、`FUZZ_JOBS=N`、`FUZZ_TARGETS="http dns"`），target 在 `tests/fuzz/fuzz_*.c`（decode、http、tls、dns、rules、engine、config），log 和 crash 在 `build/fuzz/`；`make fuzz-replay`（`make test` 會跑）用一般編譯器重播種子和 `tests/fuzz/regressions/`；`make hardening` 檢查 PIE／RELRO／NX／stack protector／FORTIFY（`HARDEN=0` 關閉強化旗標）
 - 即時監聽：`sudo ./SimpleIDS -i <iface>`（macOS 的 loopback 介面是 `lo0`，Linux 是 `lo`）
 - 離線分析：`./SimpleIDS -r file.pcap`（不需要 root）；`-l` 指定 JSON log（`-` 輸出到 stdout），`-q` 不在終端機印告警
+- 設定檔：`-c etc/simpleids.conf`（INI 子集，列出所有設定與預設值）；優先順序是預設 < 設定檔 < 命令列，`-R` 會取代設定檔的規則路徑。降權與 sandbox：`-u USER`／`-g GROUP`（開好裝置、log、規則之後才切換），預設會進 seccomp（Linux）／sandbox（macOS），`--no-sandbox` 關閉；sanitizer 建置不進 seccomp。log 輪替：`--log-max-size SIZE`、`--log-max-files N`；統計：`--stats-interval S`（寫 `event_type:"stats"` 到 log）、`--measure-latency`；`kill -USR1 <pid>` 立刻寫一筆 stats
 - 其他選項：`-f FILTER`（BPF，`-f ''` 不過濾）、`--max-flows N`、`--stream-depth SIZE`、`--stream-memcap SIZE`（SIZE 可加 K/M/G）、`--overlap first|last`、`--var NAME=VALUE`（規則變數，如 `HOME_NET`）
 - `./SimpleIDS --test-rules [-R ...]`：只檢查規則（語法、重複 sid、效能警告），錯誤以 `檔案:行號` 回報，沒有錯誤時 exit 0
-- `kill -HUP <pid>`：重新載入規則；新規則集必須零錯誤才會換上，否則保留舊規則
+- `kill -HUP <pid>`：重新載入規則並重新開啟 log；新規則集必須零錯誤才會換上，否則保留舊規則
 - 目錄結構：標頭檔在 `include/simpleids/`，程式碼依模組放在 `src/{core,decode,flow,stream,detect,anomaly,output,app,util}/`
 - **macOS 注意**：如果 clang 找不到 `stdio.h`，代表 sysroot 指向的 SDK 不存在。可以加上 `-isysroot $(xcrun --show-sdk-path)`，或重新安裝 Command Line Tools。
 - 必須在 repo 根目錄執行，因為規則檔是用相對路徑載入的（預設 `rules/*.rules` + `rules/crs/*.rules`）。`-R PATH` 可指定規則檔或目錄（目錄會載入其中所有 `*.rules`；可重複，會取代預設）。
@@ -24,6 +26,8 @@
 ## 開發慣例
 - 修改程式後，一定要用 `-fsanitize=address,undefined` 編譯，並跑過測試。
 - 處理封包和規則時，函式一律帶長度參數，不可以假設 payload 有 NUL 結尾。
+- fuzz 找到 crash 時：把輸入（最小化後）放進 `tests/fuzz/regressions/<target>/`，修正後再補一個 unit test。新增 parser 或會吃外部輸入的程式（含設定檔），要一起寫 fuzz target。
+- 新增 syscall 用量（例如新的檔案操作或 libpcap 呼叫）時，要確認 `src/core/sandbox.c` 的 seccomp allowlist；被擋時程式會以 159 結束並印出 syscall 編號。
 - 每修一個偵測相關的 bug，都要補一個能重現該 bug 的測試案例：單元測試放 `tests/unit/`，端到端情境加進 `tests/regression/gen_pcaps.py` 再跑 `make pcaps`（產生的 pcap 和 `*.expected.json` 要一起 commit）。
 - 單元測試裡的 payload 用 `exact_buf()` / `exact_bytes()` 放進剛好大小的 heap buffer，ASan 才抓得到越界讀取。
 - 偵測在重組後的串流上進行（`src/core/engine.c` 的 `inspect_stream`）；新增應用層解析時，要能處理資料分好幾次送達，且不可假設一次拿到完整訊息。
