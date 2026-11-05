@@ -3,7 +3,7 @@
 以 C + libpcap 撰寫的教學用網路入侵偵測系統（NIDS）。
 
 - **規格與發展計畫**：@docs/ROADMAP.md（開始任何工作前先讀；完成項目要回頭勾選，並註記 commit）
-- **目前進度**：Phase 5 完成（libFuzzer 7 個 target + CI smoke + nightly、降權 + seccomp／macOS sandbox、編譯強化（FORTIFY=3、PIE、full RELRO）、INI 設定檔、log 輪替、stats 事件、bench 加入每封包延遲與 peak RSS；300 條規則 670 Mbit/s、RSS 80 MiB），接下來是 Phase 6（進階選配）；Phase 5 的「每個 fuzz target 累積 24 小時」由 `.github/workflows/fuzz.yml` nightly 累積中
+- **目前進度**：Phase 5 完成（libFuzzer 7 個 target + CI smoke + nightly、降權 + seccomp／macOS sandbox、編譯強化（FORTIFY=3、PIE、full RELRO）、INI 設定檔、log 輪替、stats 事件、bench 加入每封包延遲與 peak RSS；300 條規則 670 Mbit/s、RSS 80 MiB），接下來是 Phase 6（進階選配）；Phase 5 的「每個 fuzz target 累積 24 小時」由 `.github/workflows/fuzz.yml` nightly 累積（合併進 `main` 後才會排程執行）
 - **溝通語言**：回覆使用繁體中文
 
 ## 建置與執行

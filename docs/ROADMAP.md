@@ -2,7 +2,7 @@
 
 > 狀態：草案 v0.1（2026-11-03）
 > 基準版本：commit `8dbe7c3`（Phase 1 完成）
-> 進度：Phase 5 完成（分支 `phase-5`，2026-11-05；24 小時 fuzz 驗收由 nightly workflow 累積中）；Phase 4 完成（分支 `phase-4`，2026-11-04）；Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
+> 進度：Phase 5 完成（分支 `phase-5`，2026-11-05；24 小時 fuzz 驗收待 nightly workflow 合併進 `main` 後累積）；Phase 4 完成（分支 `phase-4`，2026-11-04）；Phase 3 完成（分支 `phase-3`，2026-11-03）；Phase 2 完成（分支 `phase-2`）；Phase 1.5 完成（分支 `phase-1.5`）
 > 用途：作為後續開發（含 Claude Code 雲端 session）的單一依據。每完成一項，就在對應的 checkbox 打勾，並註記 commit。
 
 ---
@@ -200,7 +200,7 @@ alert http any any -> $HOME_NET any (
 - [x] 效能基準測試：`make bench` 跑固定的 pcap，輸出 Mbps（`535d1c1`、`9d59969`：`tests/bench/bench.py` 新增 `--measure-latency` 量每封包延遲（直方圖，每 2 倍再分 8 格，avg／p50／p99／p99.9／max）與 `wait4` 量 peak RSS，RSS > 256 MB 就失敗；500 Mbit/s 目標只顯示不判定（雲端機器速度浮動）。callgrind 找到兩個熱點並優化（`9d59969`）：異常偵測的頻率表從線性 `strcmp` 掃描改成 SipHash 雜湊加 O(1) LRU，IPv4 位址字串不再經過 `inet_ntop`／`sprintf`，告警輸出逐 byte 相同）
 - **驗收**：每個 fuzz target 累積 ≥ 24 小時沒有 crash，達到 §3.3 的效能目標。
   - ✅ 效能：`make bench`（release 建置，5 次取最快）10 條規則 802 Mbit/s、300 條規則 **670 Mbit/s**（下降 16.5%）；同一台機器同時間對照，Phase 4 為 448–457 Mbit/s、Phase 5 優化前 440–444 Mbit/s、優化後 624–705 Mbit/s，所以強化旗標與 seccomp 的成本在雜訊範圍內。每封包延遲 avg 2.0 µs、p50 144 ns、p99 15.4 µs、p99.9 32.8 µs。記憶體：peak RSS **79.6 MiB**（預設 65536 flows + 64 MB memcap，上限 256 MB）。
-  - ⏳ fuzz 24 小時：本機 6 個 target 平行各跑 20 分鐘無 crash（decode 2.6 億次、dns 4.1 億次、tls 5470 萬次、http 500 萬次、rules 190 萬次、engine 178 萬次）；CI smoke 每次 push 跑。24 小時由 `fuzz.yml` nightly（每 target 每晚 3 小時，job summary 顯示累計 CPU 時數）累積，約 8 個晚上達標。
+  - ⏳ fuzz 24 小時：本機 6 個 target 平行各跑 20 分鐘無 crash（decode 2.6 億次、dns 4.1 億次、tls 5470 萬次、http 500 萬次、rules 190 萬次、engine 178 萬次）；CI smoke 每次 push 跑。24 小時由 `fuzz.yml` nightly（每 target 每晚 3 小時，job summary 顯示累計 CPU 時數）累積，約 8 個晚上達標。注意 GitHub 的 `schedule`／`workflow_dispatch` 只會跑預設分支（`main`）上的 workflow，所以要等合併進 `main` 才會開始累積。
 - **行為說明與已知限制**
   - sanitizer 建置（`make asan`）不進 seccomp，因為 LSan 需要 ptrace／clone；macOS ASan 同樣跳過 sandbox。
   - 降權後 log 輪替需要 log 所在目錄對新使用者可寫（rename 和建新檔都在目錄層級）；不可寫時會繼續寫原檔並計入 `rotate_errors`。SIGHUP 重讀規則時，規則檔也必須對新使用者可讀。
