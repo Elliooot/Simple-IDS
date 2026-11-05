@@ -134,6 +134,30 @@ static void test_hpp(void) {
     }
 }
 
+/* Found by fuzz_http: a name longer than the decode buffer (192 bytes)
+ * made the value length come out too large, so the value was read past
+ * the end of the parameter and of the buffer. */
+static void test_hpp_long_name(void) {
+    char q[1024];
+    char name[301];
+    memset(name, 'a', 300);
+    name[300] = '\0';
+    size_t n;
+    unsigned flags = 0;
+
+    snprintf(q, sizeof(q), "%s=1", name);           /* last parameter */
+    uint8_t *in = exact_buf(q, &n);
+    CHECK_EQ_INT(http_check_params(in, n, &flags), 0);
+    CHECK_EQ_INT(flags, 0);
+    free(in);
+
+    snprintf(q, sizeof(q), "%s=/*x&%s=*/y", name, name);
+    in = exact_buf(q, &n);
+    CHECK_EQ_INT(http_check_params(in, n, &flags), 1);
+    CHECK_EQ_INT(flags, HTTP_NORM_HPP_COMMENT);
+    free(in);
+}
+
 static void test_dechunk(void) {
     uint8_t out[64];
     size_t ol, used, n;
@@ -229,6 +253,7 @@ const test_case_t http_norm_tests[] = {
     TEST(test_norm_bounds),
     TEST(test_form_decode),
     TEST(test_hpp),
+    TEST(test_hpp_long_name),
     TEST(test_dechunk),
     TEST(test_parse_tx),
     TEST_END

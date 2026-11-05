@@ -342,12 +342,14 @@ int http_check_params(const uint8_t *query, size_t len, unsigned *flags) {
         if (plen == 0) continue;
 
         const uint8_t *eq = memchr(param, '=', plen);
-        size_t nraw = eq ? (size_t)(eq - param) : plen;
+        size_t nfull = eq ? (size_t)(eq - param) : plen;
         uint8_t name[HPP_NAME_MAX * 3], value[HPP_VALUE_MAX];
-        if (nraw > sizeof(name)) nraw = sizeof(name);
+        /* Only a prefix of a long name is decoded, but the value starts
+         * after the whole name. */
+        size_t nraw = nfull < sizeof(name) ? nfull : sizeof(name);
         size_t nl = url_decode(param, nraw, name, 1, &dummy);
         if (nl > HPP_NAME_MAX) nl = HPP_NAME_MAX;
-        size_t vraw = eq ? plen - nraw - 1 : 0;
+        size_t vraw = eq ? plen - nfull - 1 : 0;
         if (vraw > sizeof(value)) vraw = sizeof(value);
         size_t vl = eq ? url_decode(eq + 1, vraw, value, 1, &dummy) : 0;
         int comment = bytes_find(value, vl, (const uint8_t *)"/*", 2, 0) ||
