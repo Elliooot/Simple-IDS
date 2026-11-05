@@ -1,0 +1,78 @@
+# Long fuzzing campaign (ROADMAP Phase 5 acceptance: >= 24 hours per
+# target without a crash). Runs nightly and on demand; each target's
+# corpus and its accumulated fuzzing time are kept in the Actions cache,
+# so the hours add up across runs. A crash fails the job and uploads the
+# input; add it to tests/fuzz/regressions/<target>/ with the fix.
+name: Fuzz
+
+on:
+  schedule:
+    - cron: "17 18 * * *"
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: "Seconds per target"
+        default: "10800"
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [decode, http, tls, dns, rules, engine, config]
+    env:
+      SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '10800' }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install libpcap, PCRE2 and the libFuzzer runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libpcre2-dev pkg-config clang
+          v=$(clang -dumpversion | cut -d. -f1)
+          sudo apt-get install -y "libclang-rt-$v-dev" || true
+
+      - name: Restore corpus and fuzzing time
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            build/fuzz/corpus/${{ matrix.target }}
+            fuzz-hours
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-${{ matrix.target }}-
+
+      - name: Fuzz
+        run: make fuzz FUZZ_TARGETS=${{ matrix.target }} FUZZ_TIME=$SECONDS_PER_TARGET FUZZ_JOBS=$(nproc)
+
+      - name: Add up fuzzing time
+        if: success()
+        run: |
+          mkdir -p fuzz-hours
+          f=fuzz-hours/${{ matrix.target }}
+          prev=$(cat "$f" 2>/dev/null || echo 0)
+          total=$(( prev + SECONDS_PER_TARGET * $(nproc) ))
+          echo "$total" > "$f"
+          echo "fuzz_${{ matrix.target }}: $(( total / 3600 )) CPU-hours in total without a crash ($(nproc) workers this run)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save corpus and fuzzing time
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            build/fuzz/corpus/${{ matrix.target }}
+            fuzz-hours
+          key: fuzz-${{ matrix.target }}-${{ github.run_id }}
+
+      - name: Keep crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-${{ matrix.target }}
+          path: build/fuzz/crash-*
+          if-no-files-found: ignore

@@ -28,6 +28,7 @@ jobs:
         if: runner.os == 'macOS'
         run: brew list pcre2 >/dev/null 2>&1 || brew install pcre2
 
+      # make test also replays the fuzz seeds and checks the hardening flags.
       - name: Build and test (release)
         if: matrix.variant == 'release'
         run: |
@@ -38,6 +39,31 @@ jobs:
         if: matrix.variant == 'asan'
         run: make WERROR=1 SAN=1 test
 
+  # Every libFuzzer target for a short while: a smoke test, not the long
+  # campaign (that is .github/workflows/fuzz.yml).
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install libpcap, PCRE2 and the libFuzzer runtime
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libpcap-dev libpcre2-dev pkg-config clang
+          v=$(clang -dumpversion | cut -d. -f1)
+          sudo apt-get install -y "libclang-rt-$v-dev" || true
+
+      - name: Fuzz each target for 45 seconds
+        run: make fuzz FUZZ_TIME=45
+
+      - name: Keep crash inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-smoke-crashes
+          path: build/fuzz/crash-*
+          if-no-files-found: ignore
+
   hygiene:
     runs-on: ubuntu-latest
     steps:
@@ -45,7 +71,7 @@ jobs:
 
       - name: No build artifacts in the repository (B15)
         run: |
-          if git ls-files | grep -E '(^|/)(SimpleIDS|sniffer)$|\.o$|\.pyc$|__pycache__'; then
+          if git ls-files | grep -E '(^|/)(SimpleIDS|sniffer)$|\.o$|\.pyc$|__pycache__|(^|/)fuzz-[0-9]+\.log$'; then
             echo "::error::build artifacts are tracked by git"
             exit 1
           fi

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <sys/time.h>
+#include <sys/types.h>
 
 #include "simpleids/decode.h"
 
@@ -57,6 +58,35 @@ FILE *output_console(void);
 void output_alert(const alert_event_t *ev);
 
 unsigned long output_alert_count(void);
+
+/*
+ * Size-based rotation of the log file: once it reaches max_size bytes,
+ * ids.log becomes ids.log.1 (ids.log.1 -> .2, ...; at most max_files
+ * old files are kept) and a new ids.log is started. max_size 0 turns
+ * rotation off. Not applied to "-" (stdout).
+ */
+void output_set_rotation(uint64_t max_size, unsigned max_files);
+
+/* Close and reopen the log file (SIGHUP, after an external logrotate). */
+int  output_reopen(void);
+
+/* Give the open log file to the user we drop privileges to. */
+int  output_log_chown(uid_t uid, gid_t gid);
+
+/* Is a JSON log open? */
+int  output_has_log(void);
+
+/* Write one pre-formatted JSON object (no newline) as a log line. */
+void output_event(const char *json_line);
+
+typedef struct {
+    uint64_t      log_bytes;      /* size of the current log file */
+    unsigned long rotations;
+    unsigned long rotate_errors;
+    unsigned long write_errors;
+} output_stats_t;
+
+const output_stats_t *output_stats(void);
 
 /*
  * JSON-escape src[0..srclen) into dst (dstlen bytes, always

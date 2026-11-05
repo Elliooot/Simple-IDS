@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """
-Rule-count benchmark (ROADMAP Phase 4 acceptance): throughput with the
-full shipped rule set (300 rules) must stay within 30% of a 10-rule set.
+Benchmark (ROADMAP Phase 4 and 5): throughput with the full shipped rule
+set (300 rules) must stay within 30% of a 10-rule set; then one more run
+with --measure-latency reports the per-packet latency percentiles and the
+peak resident memory, against the §3.3 targets (>= 500 Mbit/s single
+thread, which depends on the machine and is only reported; memory well
+under 256 MiB, which is checked).
 
 A deterministic pcap of HTTP traffic is generated under build/bench/:
 complete TCP connections (handshake, request, FIN) from many clients,
@@ -12,12 +16,14 @@ parsing, detection) without alert output. Each configuration runs
 --runs times; the fastest run counts (the least disturbed by the host).
 
 Usage: python3 tests/bench/bench.py [--bin ./SimpleIDS] [--requests N]
-       [--runs N] [--max-drop 0.30]
-Exit status 1 when the drop is at or above --max-drop.
+       [--runs N] [--max-drop 0.30] [--max-rss-mb 256]
+Exit status 1 when the drop is at or above --max-drop, or the peak RSS is
+above --max-rss-mb.
 """
 
 import argparse
 import os
+import platform
 import random
 import re
 import struct
@@ -125,15 +131,26 @@ def ten_rules(path):
     return len(picked)
 
 
-def run(binary, pcap, rule_args):
-    t0 = time.perf_counter()
-    p = subprocess.run([binary, "-r", pcap, "-l", "none", "-q"] + rule_args, cwd=ROOT,
-                       capture_output=True, text=True)
-    elapsed = time.perf_counter() - t0
+def run_measured(args):
+    """Run args; return (elapsed seconds, output, peak RSS in bytes)."""
+    with open(os.devnull, "rb") as devnull:
+        t0 = time.perf_counter()
+        p = subprocess.Popen(args, cwd=ROOT, stdin=devnull, stdout=subprocess.PIPE,
+                             stderr=subprocess.STDOUT, text=True)
+        output = p.stdout.read()
+        _, status, ru = os.wait4(p.pid, 0)
+        elapsed = time.perf_counter() - t0
+    p.returncode = os.waitstatus_to_exitcode(status)
     if p.returncode != 0:
-        sys.exit(f"SimpleIDS failed ({p.returncode}):\n{p.stderr}")
-    m = re.search(r"(\d+) rules", p.stdout + p.stderr)
-    alerts = re.search(r"Signature alerts\s*:\s*(\d+)", p.stdout + p.stderr)
+        sys.exit(f"SimpleIDS failed ({p.returncode}):\n{output}")
+    rss = ru.ru_maxrss if platform.system() == "Darwin" else ru.ru_maxrss * 1024
+    return elapsed, output, rss
+
+
+def run(binary, pcap, rule_args):
+    elapsed, output, _ = run_measured([binary, "-r", pcap, "-l", "none", "-q"] + rule_args)
+    m = re.search(r"(\d+) rules", output)
+    alerts = re.search(r"Signature alerts\s*:\s*(\d+)", output)
     return elapsed, int(m.group(1)) if m else 0, int(alerts.group(1)) if alerts else -1
 
 
@@ -143,6 +160,7 @@ def main():
     ap.add_argument("--requests", type=int, default=40000)
     ap.add_argument("--runs", type=int, default=5)
     ap.add_argument("--max-drop", type=float, default=0.30)
+    ap.add_argument("--max-rss-mb", type=float, default=256)
     args = ap.parse_args()
     binary = os.path.abspath(args.bin)
 
@@ -172,7 +190,26 @@ def main():
     ok = drop < args.max_drop
     print(f"  throughput drop: {drop * 100:.1f}% (limit {args.max_drop * 100:.0f}%) "
           f"{'ok' if ok else 'FAIL'}")
-    return 0 if ok else 1
+
+    # Latency and memory with every rule (one extra run; the clock reads
+    # cost a little throughput, so this run is not part of the above).
+    _, output, rss = run_measured([binary, "-r", pcap, "-l", "none", "-q", "--measure-latency"])
+    lat = re.search(r"Latency per packet\s*:\s*avg (\d+) ns, p50 (\d+), p99 (\d+), "
+                    r"p99\.9 (\d+), max (\d+) ns", output)
+    if lat:
+        avg, p50, p99, p999, mx = (int(x) for x in lat.groups())
+        print(f"  latency per packet (all rules): avg {avg} ns, p50 {p50} ns, p99 {p99} ns, "
+              f"p99.9 {p999} ns, max {mx / 1000:.1f} us")
+    else:
+        print("  latency: not reported")
+        ok = False
+    mbps = nbytes * 8 / results["all rules"] / 1e6
+    rss_ok = rss <= args.max_rss_mb * 1024 * 1024
+    print(f"  peak RSS (all rules): {rss / 1048576:.1f} MiB (limit {args.max_rss_mb:.0f} MiB) "
+          f"{'ok' if rss_ok else 'FAIL'}")
+    print(f"  target >= 500 Mbit/s single thread: {mbps:.0f} Mbit/s "
+          f"{'met' if mbps >= 500 else 'not met on this machine'} (informational)")
+    return 0 if ok and rss_ok else 1
 
 
 if __name__ == "__main__":

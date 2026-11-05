@@ -18,6 +18,8 @@ extern const test_case_t output_tests[];
 extern const test_case_t flow_tests[];
 extern const test_case_t stream_tests[];
 extern const test_case_t engine_tests[];
+extern const test_case_t settings_tests[];
+extern const test_case_t sandbox_tests[];
 
 static const struct {
     const char *name;
@@ -36,6 +38,8 @@ static const struct {
     { "flow",    flow_tests },
     { "stream",  stream_tests },
     { "engine",  engine_tests },
+    { "settings", settings_tests },
+    { "sandbox", sandbox_tests },
 };
 
 /* Usage: unit_tests [substring]   runs tests whose name contains it. */

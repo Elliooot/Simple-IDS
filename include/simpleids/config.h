@@ -1,7 +1,8 @@
 #ifndef SIMPLEIDS_CONFIG_H
 #define SIMPLEIDS_CONFIG_H
 
-/* Compile-time defaults. A config file arrives in Phase 5. */
+/* Compile-time defaults; the config file (-c, include/simpleids/settings.h)
+ * and the command line override most of them at run time. */
 
 /* Loopback interface name differs per OS (B12). */
 #ifdef __APPLE__

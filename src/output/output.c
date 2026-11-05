@@ -3,6 +3,7 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
 #include "simpleids/output.h"
 
@@ -16,6 +17,13 @@ static int g_log_is_stdout = 0;
 static int g_quiet = 0;
 static unsigned long g_alerts = 0;
 
+/* Log rotation: path, bytes in the current file, limits. */
+static char g_path[1024];
+static uint64_t g_size, g_next_rotate;
+static uint64_t g_max_size;
+static unsigned g_max_files = 5;
+static output_stats_t g_ostats;
+
 FILE *output_console(void) {
     return g_log_is_stdout ? stderr : stdout;
 }
@@ -28,6 +36,108 @@ unsigned long output_alert_count(void) {
     return g_alerts;
 }
 
+static void reset_rotation_point(void) {
+    g_next_rotate = g_max_size ? g_size + (g_size < g_max_size ? g_max_size - g_size : g_max_size)
+                               : 0;
+}
+
+/* (Re)open g_path for appending and learn its current size. */
+static int open_path(void) {
+    g_log = fopen(g_path, "a");
+    if (!g_log) return -1;
+    struct stat st;
+    g_size = fstat(fileno(g_log), &st) == 0 ? (uint64_t)st.st_size : 0;
+    reset_rotation_point();
+    return 0;
+}
+
+void output_set_rotation(uint64_t max_size, unsigned max_files) {
+    g_max_size = max_size;
+    g_max_files = max_files ? max_files : 1;
+    reset_rotation_point();
+}
+
+/*
+ * ids.log -> ids.log.1 -> ... -> ids.log.N (the oldest is removed), then
+ * start a new ids.log. When a rename fails (e.g. no write permission on
+ * the directory after dropping privileges), keep appending to the same
+ * file and try again after another max_size bytes.
+ */
+static void rotate(void) {
+    char from[sizeof(g_path) + 16], to[sizeof(g_path) + 16];
+    fflush(g_log);
+    snprintf(to, sizeof(to), "%s.%u", g_path, g_max_files);
+    if (unlink(to) < 0 && errno != ENOENT) goto failed;
+    for (unsigned i = g_max_files - 1; i >= 1; i--) {
+        snprintf(from, sizeof(from), "%s.%u", g_path, i);
+        snprintf(to, sizeof(to), "%s.%u", g_path, i + 1);
+        if (rename(from, to) < 0 && errno != ENOENT) goto failed;
+    }
+    snprintf(to, sizeof(to), "%s.1", g_path);
+    if (rename(g_path, to) < 0) goto failed;
+    fclose(g_log);
+    if (open_path() < 0) {
+        fprintf(stderr, "Cannot reopen log file %s after rotation: %s (logging stopped)\n",
+                g_path, strerror(errno));
+        g_ostats.rotate_errors++;
+        return;
+    }
+    g_ostats.rotations++;
+    return;
+failed:
+    if (!g_ostats.rotate_errors++)
+        fprintf(stderr, "Cannot rotate log file %s: %s (still writing to it)\n", g_path,
+                strerror(errno));
+    g_next_rotate = g_size + g_max_size;
+}
+
+/* Count bytes written; rotate once the file has grown past the limit. */
+static void written(int n) {
+    if (n < 0) {
+        g_ostats.write_errors++;
+        return;
+    }
+    g_size += (uint64_t)n;
+    if (g_max_size && !g_log_is_stdout && g_size >= g_next_rotate) rotate();
+}
+
+const output_stats_t *output_stats(void) {
+    g_ostats.log_bytes = g_size;
+    return &g_ostats;
+}
+
+int output_reopen(void) {
+    if (!g_log || g_log_is_stdout) return 0;
+    /* Open the new file first: if that fails, keep the old one. */
+    FILE *old = g_log;
+    uint64_t old_size = g_size;
+    if (open_path() < 0) {
+        fprintf(stderr, "Cannot reopen log file %s: %s (still writing to the old one)\n",
+                g_path, strerror(errno));
+        g_log = old;
+        g_size = old_size;
+        reset_rotation_point();
+        return -1;
+    }
+    fclose(old);
+    return 0;
+}
+
+int output_log_chown(uid_t uid, gid_t gid) {
+    if (!g_log || g_log_is_stdout) return 0;
+    return fchown(fileno(g_log), uid, gid);
+}
+
+int output_has_log(void) {
+    return g_log != NULL;
+}
+
+void output_event(const char *json_line) {
+    if (!g_log) return;
+    written(fprintf(g_log, "%s\n", json_line));
+    if (g_log) fflush(g_log);
+}
+
 int output_open(const char *path) {
     output_close();
     g_alerts = 0;
@@ -38,6 +148,11 @@ int output_open(const char *path) {
         g_log_is_stdout = 1;
         return 0;
     }
+    if (strlen(path) >= sizeof(g_path)) {
+        fprintf(stderr, "Log file name too long\n");
+        return -1;
+    }
+    snprintf(g_path, sizeof(g_path), "%s", path);
 
     if (strcmp(path, OUTPUT_DEFAULT_LOG) == 0) {
         /* Create logs/ next to where we run (the repo root). */
@@ -47,8 +162,7 @@ int output_open(const char *path) {
         }
     }
 
-    g_log = fopen(path, "a");
-    if (!g_log) {
+    if (open_path() < 0) {
         fprintf(stderr, "Cannot open log file %s: %s\n", path, strerror(errno));
         return -1;
     }
@@ -157,7 +271,7 @@ void output_alert(const alert_event_t *ev) {
             snprintf(cat, sizeof(cat), "\"category\":\"%s\",", esc);
         }
 
-        fprintf(g_log,
+        int n = fprintf(g_log,
                 "{\"timestamp\":\"%s\",\"flow_id\":%llu,\"event_type\":\"alert\","
                 "\"src_ip\":\"%s\",\"src_port\":%u,"
                 "\"dest_ip\":\"%s\",\"dest_port\":%u,\"proto\":\"%s\",%s"
@@ -171,5 +285,6 @@ void output_alert(const alert_event_t *ev) {
                 src_name, msg,
                 payload, (plen < ev->data_len || ev->truncated) ? "true" : "false");
         fflush(g_log);
+        written(n);
     }
 }

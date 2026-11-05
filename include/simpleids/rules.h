@@ -2,6 +2,7 @@
 #define SIMPLEIDS_RULES_H
 
 #include <stddef.h>
+#include <stdio.h>
 #include <stdint.h>
 
 #include "simpleids/threshold.h"
@@ -231,6 +232,9 @@ int ruleset_add(ruleset_t *rs, rule_t *r);
  * skipped lines.
  */
 int ruleset_load_file(ruleset_t *rs, const char *path, int *errors);
+
+/* The same from an open stream; name is used in messages and rule_t.file. */
+int ruleset_load_stream(ruleset_t *rs, FILE *fp, const char *name, int *errors);
 
 /* Group rules by phase and build the prefilters. Must be called once
  * after loading and before matching. Returns 0 or -1 (out of memory). */

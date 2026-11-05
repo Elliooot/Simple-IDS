@@ -1,5 +1,8 @@
 #include <arpa/inet.h>
+#include <stdarg.h>
 #include <string.h>
+#include <sys/resource.h>
+#include <time.h>
 
 #include "simpleids/anomaly.h"
 #include "simpleids/bytes.h"
@@ -19,6 +22,14 @@
 static engine_stats_t g_stats;
 static int g_verbose = 0;
 
+/* Per-packet latency histogram: 8 sub-buckets per power of two (ns). */
+#define LAT_SUB     8
+#define LAT_BUCKETS (64 * LAT_SUB)
+static int g_latency_on;
+static unsigned long g_lat_hist[LAT_BUCKETS];
+static unsigned long g_lat_count;
+static uint64_t g_lat_sum, g_lat_max;
+
 void engine_set_verbose(int verbose) {
     g_verbose = verbose;
 }
@@ -29,6 +40,9 @@ const engine_stats_t *engine_stats(void) {
 
 void engine_reset_stats(void) {
     memset(&g_stats, 0, sizeof(g_stats));
+    memset(g_lat_hist, 0, sizeof(g_lat_hist));
+    g_lat_count = 0;
+    g_lat_sum = g_lat_max = 0;
     stream_reset_stats();
     rules_reset_stats();
 }
@@ -742,16 +756,189 @@ void engine_process_packet(const struct timeval *ts, const packet_t *pkt) {
     }
 }
 
-void engine_process_frame(int linktype, const struct timeval *ts,
+/* ------------------------------------------------------------------ */
+/* Latency histogram: 8 sub-buckets per power of two of nanoseconds.   */
+/* ------------------------------------------------------------------ */
+
+
+void engine_set_latency(int on) {
+    g_latency_on = on;
+}
+
+static uint64_t now_ns(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (uint64_t)t.tv_sec * 1000000000u + (uint64_t)t.tv_nsec;
+}
+
+static unsigned lat_bucket(uint64_t ns) {
+    if (ns < LAT_SUB) return (unsigned)ns;
+    unsigned msb = 63u - (unsigned)__builtin_clzll(ns);
+    unsigned sub = (unsigned)(ns >> (msb - 3)) & (LAT_SUB - 1);   /* msb >= 3 here */
+    return msb * LAT_SUB + sub;
+}
+
+/* Lower bound of a bucket: the value reported for it. */
+static uint64_t lat_value(unsigned b) {
+    if (b < LAT_SUB) return b;
+    unsigned msb = b / LAT_SUB, sub = b % LAT_SUB;
+    return (1ull << msb) | ((uint64_t)sub << (msb - 3));
+}
+
+static void lat_record(uint64_t ns) {
+    g_lat_hist[lat_bucket(ns)]++;
+    g_lat_count++;
+    g_lat_sum += ns;
+    if (ns > g_lat_max) g_lat_max = ns;
+}
+
+static uint64_t lat_percentile(double q) {
+    unsigned long want = (unsigned long)(q * (double)g_lat_count);
+    if (want >= g_lat_count) want = g_lat_count - 1;
+    unsigned long seen = 0;
+    for (unsigned b = 0; b < LAT_BUCKETS; b++) {
+        seen += g_lat_hist[b];
+        if (seen > want) return lat_value(b);
+    }
+    return g_lat_max;
+}
+
+void engine_latency(engine_latency_t *out) {
+    memset(out, 0, sizeof(*out));
+    out->count = g_lat_count;
+    if (!g_lat_count) return;
+    out->avg_ns = (double)g_lat_sum / (double)g_lat_count;
+    out->p50_ns = lat_percentile(0.50);
+    out->p90_ns = lat_percentile(0.90);
+    out->p99_ns = lat_percentile(0.99);
+    out->p999_ns = lat_percentile(0.999);
+    out->max_ns = g_lat_max;
+}
+
+static void process_frame(int linktype, const struct timeval *ts,
                           const uint8_t *data, size_t caplen) {
     packet_t pkt;
     g_stats.packets++;
+    g_stats.bytes += caplen;
 
     decode_result_t r = decode_packet(linktype, data, caplen, &pkt);
     g_stats.decode[r]++;
     if (r != DECODE_OK) return;
 
     engine_process_packet(ts, &pkt);
+}
+
+void engine_process_frame(int linktype, const struct timeval *ts,
+                          const uint8_t *data, size_t caplen) {
+    if (!g_latency_on) {
+        process_frame(linktype, ts, data, caplen);
+        return;
+    }
+    uint64_t t0 = now_ns();
+    process_frame(linktype, ts, data, caplen);
+    lat_record(now_ns() - t0);
+}
+
+/* ------------------------------------------------------------------ */
+/* Stats event                                                          */
+/* ------------------------------------------------------------------ */
+
+uint64_t engine_peak_rss(void) {
+    struct rusage ru;
+    if (getrusage(RUSAGE_SELF, &ru) < 0) return 0;
+#ifdef __APPLE__
+    return (uint64_t)ru.ru_maxrss;            /* bytes on macOS */
+#else
+    return (uint64_t)ru.ru_maxrss * 1024u;    /* KiB on Linux   */
+#endif
+}
+
+typedef struct { char *buf; size_t cap, len; } sbuf_t;
+
+__attribute__((format(printf, 2, 3)))
+static void sb_add(sbuf_t *b, const char *fmt, ...) {
+    if (b->len + 1 >= b->cap) return;
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(b->buf + b->len, b->cap - b->len, fmt, ap);
+    va_end(ap);
+    if (n < 0) return;
+    b->len += (size_t)n;
+    if (b->len >= b->cap) b->len = b->cap - 1;
+}
+
+size_t engine_stats_json(char *buf, size_t cap, const struct timeval *ts, double uptime,
+                         double interval, const capture_counts_t *cc) {
+    static unsigned long last_packets;
+    static unsigned long long last_bytes;
+    const engine_stats_t *s = &g_stats;
+    const flow_stats_t *fs = flow_stats();
+    const stream_stats_t *ss = stream_stats();
+    const rules_stats_t *rst = rules_stats();
+    const output_stats_t *os = output_stats();
+    sbuf_t b = { buf, cap, 0 };
+    char t[40];
+
+    if (cap == 0) return 0;
+    buf[0] = '\0';
+    format_timestamp(ts, t, sizeof(t));
+    double dt = interval > 0 ? interval : 0;
+    unsigned long dp = s->packets - last_packets;
+    unsigned long long db = s->bytes - last_bytes;
+    last_packets = s->packets;
+    last_bytes = s->bytes;
+
+    sb_add(&b, "{\"timestamp\":\"%s\",\"event_type\":\"stats\",\"stats\":{\"uptime\":%.3f,",
+           t, uptime);
+    sb_add(&b, "\"capture\":{\"packets\":%lu,\"bytes\":%llu,\"interval\":%.3f,"
+               "\"interval_packets\":%lu,\"pps\":%.1f,\"mbps\":%.3f",
+           s->packets, s->bytes, dt, dp, dt > 0 ? (double)dp / dt : 0.0,
+           dt > 0 ? (double)db * 8.0 / dt / 1e6 : 0.0);
+    if (cc && cc->valid) {
+        unsigned long lost = cc->dropped + cc->ifdropped;
+        unsigned long seen = cc->received + cc->ifdropped;
+        sb_add(&b, ",\"kernel_received\":%lu,\"kernel_drops\":%lu,\"if_drops\":%lu,"
+                   "\"drop_rate\":%.6f",
+               cc->received, cc->dropped, cc->ifdropped,
+               seen ? (double)lost / (double)seen : 0.0);
+    }
+    sb_add(&b, "},\"decoder\":{\"tcp\":%lu,\"udp\":%lu,\"ipv6\":%lu,\"vlan\":%lu,"
+               "\"truncated\":%lu,\"skipped\":%lu},",
+           s->tcp, s->udp, s->ipv6, s->vlan, s->truncated_payloads,
+           s->packets - s->decode[DECODE_OK]);
+    sb_add(&b, "\"flow\":{\"active\":%lu,\"peak\":%lu,\"created\":%lu,\"timed_out\":%lu,"
+               "\"evicted\":%lu,\"table_bytes\":%zu},",
+           fs->active, fs->active_peak, fs->created, fs->timed_out, fs->evicted,
+           flow_table_memory());
+    sb_add(&b, "\"stream\":{\"segments\":%lu,\"gaps\":%lu,\"overlaps\":%lu,"
+               "\"memcap_drops\":%lu,\"memory_bytes\":%zu,\"memory_peak_bytes\":%zu,"
+               "\"memcap_bytes\":%zu},",
+           ss->segments, ss->gaps, ss->overlaps, ss->memcap_drops, ss->mem_used, ss->mem_peak,
+           stream_get_config()->memcap);
+    sb_add(&b, "\"app\":{\"http_requests\":%lu,\"http_bodies\":%lu,\"tls_hellos\":%lu,"
+               "\"tls_ech\":%lu,\"dns_queries\":%lu},",
+           s->http_requests, s->http_bodies, s->tls_client_hellos, s->tls_ech, s->dns_queries);
+    sb_add(&b, "\"detect\":{\"rules\":%d,\"evaluations\":%lu,\"candidates\":%lu,"
+               "\"signature_alerts\":%lu,\"anomaly_alerts\":%lu,\"thresholded\":%lu,"
+               "\"pcre_limit\":%lu,\"backtrack_limit\":%lu},",
+           ruleset_count(rules_active()), rst->evaluations, rst->candidates,
+           s->signature_alerts, s->anomaly_alerts, s->thresholded, rst->pcre_limit,
+           rst->backtrack_limit);
+    sb_add(&b, "\"memory\":{\"rss_peak_bytes\":%llu},",
+           (unsigned long long)engine_peak_rss());
+    sb_add(&b, "\"log\":{\"bytes\":%llu,\"rotations\":%lu,\"rotate_errors\":%lu}",
+           (unsigned long long)os->log_bytes, os->rotations, os->rotate_errors);
+    if (g_lat_count) {
+        engine_latency_t l;
+        engine_latency(&l);
+        sb_add(&b, ",\"latency_ns\":{\"packets\":%lu,\"avg\":%.0f,\"p50\":%llu,\"p90\":%llu,"
+                   "\"p99\":%llu,\"p999\":%llu,\"max\":%llu}",
+               l.count, l.avg_ns, (unsigned long long)l.p50_ns, (unsigned long long)l.p90_ns,
+               (unsigned long long)l.p99_ns, (unsigned long long)l.p999_ns,
+               (unsigned long long)l.max_ns);
+    }
+    sb_add(&b, "}}");
+    return b.len;
 }
 
 /* ------------------------------------------------------------------ */
@@ -811,5 +998,13 @@ void engine_print_stats(FILE *fp) {
                 s->thresholded, s->passed_flows);
     fprintf(fp, "  Signature alerts    : %lu\n", s->signature_alerts);
     fprintf(fp, "  Anomaly alerts      : %lu\n", s->anomaly_alerts);
+    if (g_lat_count) {
+        engine_latency_t l;
+        engine_latency(&l);
+        fprintf(fp, "  Latency per packet  : avg %.0f ns, p50 %llu, p99 %llu, p99.9 %llu, max %llu ns\n",
+                l.avg_ns, (unsigned long long)l.p50_ns, (unsigned long long)l.p99_ns,
+                (unsigned long long)l.p999_ns, (unsigned long long)l.max_ns);
+    }
+    fprintf(fp, "  Peak memory (RSS)   : %.1f MiB\n", (double)engine_peak_rss() / 1048576.0);
     fprintf(fp, "=======================================\n");
 }

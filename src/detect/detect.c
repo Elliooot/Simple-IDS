@@ -168,6 +168,12 @@ int ruleset_load_file(ruleset_t *rs, const char *path, int *errors) {
         fprintf(stderr, "Cannot open rules file %s: %s\n", path, strerror(errno));
         return -1;
     }
+    int n = ruleset_load_stream(rs, fp, path, errors);
+    fclose(fp);
+    return n;
+}
+
+int ruleset_load_stream(ruleset_t *rs, FILE *fp, const char *path, int *errors) {
     const char *kept = keep_path(rs, path);
 
     static char line[RULE_LINE_MAX];
@@ -256,7 +262,6 @@ int ruleset_load_file(ruleset_t *rs, const char *path, int *errors) {
         if (eof) break;
     }
 
-    fclose(fp);
     if (errors) *errors = bad;
     return loaded;
 }
