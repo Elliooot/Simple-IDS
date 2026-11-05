@@ -1,0 +1,17 @@
+# SimpleIDS rule library: protocol attacks.
+#
+# Grouped like OWASP CRS REQUEST-921-PROTOCOL-ATTACK: request smuggling,
+# response splitting and header injection. Written for SimpleIDS; samples
+# in tests/rules/samples.py.
+
+# --- Request smuggling ---------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: both Content-Length and Transfer-Encoding (request smuggling)"; http.header; content:"transfer-encoding"; nocase; content:"content-length"; nocase; pcre:"/^transfer-encoding\s*:/im"; pcre:"/^content-length\s*:/im"; classtype:web-application-attack; sid:921001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: obfuscated chunked Transfer-Encoding value (request smuggling)"; http.header; content:"transfer-encoding"; nocase; pcre:"/^transfer-encoding:(?![ \t]*(?:gzip,[ \t]*)?chunked[ \t]*\r?$)[^\r\n]*chunked/im"; classtype:web-application-attack; sid:921002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: duplicate Transfer-Encoding headers (request smuggling)"; http.header; content:"transfer-encoding"; nocase; pcre:"/^transfer-encoding\s*:.*\n(?:.*\n)*?transfer-encoding\s*:/im"; classtype:web-application-attack; sid:921003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: Content-Length with several values"; http.header; content:"content-length"; nocase; pcre:"/^content-length\s*:\s*\d+\s*,/im"; classtype:web-application-attack; sid:921004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: HTTP request smuggled in a request body"; http.request_body; content:" HTTP/1."; pcre:"/^(?:GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) \/\S* HTTP\/1\.[01]\r?$/m"; classtype:web-application-attack; sid:921005; rev:1;)
+
+# --- Response splitting / header injection -------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: Set-Cookie header injection in the request target"; http.uri; content:"set-cookie"; nocase; pcre:"/[\r\n]\s*set-cookie\s*:/i"; classtype:web-application-attack; sid:921011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: Location header injection in the request target"; http.uri; content:"location"; nocase; pcre:"/[\r\n]\s*location\s*:/i"; classtype:web-application-attack; sid:921012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL ATTACK: status line injection in the request target"; http.uri; content:"HTTP/1."; nocase; pcre:"/[\r\n]HTTP\/1\.[01] \d{3}/i"; classtype:web-application-attack; sid:921013; rev:1;)

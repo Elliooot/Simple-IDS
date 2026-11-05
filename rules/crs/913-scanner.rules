@@ -1,0 +1,36 @@
+# SimpleIDS rule library: scanner and probe detection.
+#
+# Grouped like OWASP CRS REQUEST-913-SCANNER-DETECTION. The sid prefix is
+# the CRS file number; the rules themselves are written for SimpleIDS and
+# are not translations of CRS rules. Every rule has a sample request in
+# tests/rules/samples.py.
+
+# --- Security scanner user agents ---------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: DirBuster user agent"; http.user_agent; content:"DirBuster"; nocase; classtype:attempted-recon; sid:913001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: gobuster user agent"; http.user_agent; content:"gobuster"; nocase; classtype:attempted-recon; sid:913002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: ffuf user agent"; http.user_agent; content:"Fuzz Faster U Fool"; nocase; classtype:attempted-recon; sid:913003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Wfuzz user agent"; http.user_agent; content:"Wfuzz"; nocase; classtype:attempted-recon; sid:913004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Nuclei user agent"; http.user_agent; content:"nuclei"; nocase; classtype:attempted-recon; sid:913005; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: masscan user agent"; http.user_agent; content:"masscan"; nocase; classtype:attempted-recon; sid:913006; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: zgrab user agent"; http.user_agent; content:"zgrab"; nocase; classtype:attempted-recon; sid:913007; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: WPScan user agent"; http.user_agent; content:"WPScan"; nocase; classtype:attempted-recon; sid:913008; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: WhatWeb user agent"; http.user_agent; content:"WhatWeb"; nocase; classtype:attempted-recon; sid:913009; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Hydra brute forcer user agent"; http.user_agent; content:"(Hydra)"; nocase; classtype:attempted-recon; sid:913010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Nessus user agent"; http.user_agent; content:"Nessus"; nocase; classtype:attempted-recon; sid:913011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: OpenVAS user agent"; http.user_agent; content:"OpenVAS"; nocase; classtype:attempted-recon; sid:913012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: commix user agent"; http.user_agent; content:"commix"; nocase; classtype:attempted-recon; sid:913015; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Netsparker user agent"; http.user_agent; content:"Netsparker"; nocase; classtype:attempted-recon; sid:913016; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Havij SQL injection tool"; http.user_agent; content:"Havij"; nocase; classtype:attempted-recon; sid:913017; rev:1;)
+
+# --- Scanner request headers ---------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Acunetix request header"; http.header; content:"Acunetix-"; nocase; pcre:"/^acunetix-[a-z-]+:/im"; classtype:attempted-recon; sid:913020; rev:1;)
+
+# --- Probes for well-known admin and vulnerable paths --------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: phpMyAdmin probe"; http.uri; content:"/phpmyadmin"; nocase; classtype:attempted-recon; priority:3; sid:913030; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: D-Link HNAP probe"; http.uri; content:"/HNAP1"; nocase; classtype:attempted-recon; sid:913031; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: WordPress install script probe"; http.uri; content:"/wp-admin/install.php"; nocase; classtype:attempted-recon; sid:913032; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: Spring Boot actuator probe"; http.uri; content:"/actuator/"; nocase; pcre:"/\/actuator\/(?:env|heapdump|jolokia|gateway|mappings|configprops|threaddump)/i"; classtype:attempted-recon; sid:913033; rev:1;)
+
+# --- WordPress login brute force (detection_filter) ----------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: WordPress login brute force"; http.method; content:"POST"; startswith; endswith; http.uri; content:"/wp-login.php"; nocase; detection_filter:track by_src, count 10, seconds 60; classtype:attempted-user; sid:913040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SCANNER: WordPress xmlrpc system.multicall (brute force amplification)"; http.uri; content:"/xmlrpc.php"; nocase; http.request_body; content:"system.multicall"; nocase; classtype:attempted-user; sid:913041; rev:1;)

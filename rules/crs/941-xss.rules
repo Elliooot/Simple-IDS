@@ -1,0 +1,41 @@
+# SimpleIDS rule library: cross-site scripting.
+#
+# Grouped like OWASP CRS REQUEST-941-APPLICATION-ATTACK-XSS. Written for
+# SimpleIDS; samples in tests/rules/samples.py.
+
+# --- Tags ----------------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: script tag (with attributes or whitespace)"; http.uri; content:"<script"; nocase; pcre:"/<script[\s>\/]/i"; classtype:web-application-attack; sid:941001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: script tag in a cookie"; http.cookie; content:"<script"; nocase; classtype:web-application-attack; sid:941002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: svg tag with an event handler"; http.uri; content:"<svg"; nocase; pcre:"/<svg[^>]*\son\w+\s*=/i"; classtype:web-application-attack; sid:941003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: img tag with an event handler"; http.uri; content:"<img"; nocase; pcre:"/<img[^>]*\son\w+\s*=/i"; classtype:web-application-attack; sid:941004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: iframe tag"; http.uri; content:"<iframe"; nocase; classtype:web-application-attack; sid:941005; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: object tag"; http.uri; content:"<object"; nocase; pcre:"/<object[\s>\/]/i"; classtype:web-application-attack; sid:941006; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: body tag with an event handler"; http.uri; content:"<body"; nocase; pcre:"/<body[^>]*\son\w+\s*=/i"; classtype:web-application-attack; sid:941008; rev:1;)
+
+# --- Event handlers ------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onerror handler"; http.uri; content:"onerror"; nocase; pcre:"/\bonerror\s*=/i"; classtype:web-application-attack; sid:941020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onload handler"; http.uri; content:"onload"; nocase; pcre:"/\bonload\s*=/i"; classtype:web-application-attack; sid:941021; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onmouseover handler"; http.uri; content:"onmouseover"; nocase; pcre:"/\bonmouseover\s*=/i"; classtype:web-application-attack; sid:941022; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onfocus handler"; http.uri; content:"onfocus"; nocase; pcre:"/\bonfocus\s*=/i"; classtype:web-application-attack; sid:941023; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onclick handler"; http.uri; content:"onclick"; nocase; pcre:"/\bonclick\s*=/i"; classtype:web-application-attack; sid:941024; rev:1;)
+
+# --- Script contexts and DOM sinks ---------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: vbscript: URL"; http.uri; content:"vbscript:"; nocase; classtype:web-application-attack; sid:941030; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: data:text/html URL"; http.uri; content:"data:text/html"; nocase; classtype:web-application-attack; sid:941031; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: document.cookie"; http.uri; content:"document.cookie"; nocase; classtype:web-application-attack; sid:941032; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: document.write"; http.uri; content:"document.write"; nocase; classtype:web-application-attack; sid:941034; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: alert() call"; http.uri; content:"alert"; nocase; pcre:"/\balert\s*(?:\(\s*(?:\d|['\"`]|document|window|this)|`)/i"; classtype:web-application-attack; sid:941035; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: prompt() call"; http.uri; content:"prompt"; nocase; pcre:"/\bprompt\s*(?:\(\s*(?:\d|['\"`]|document|window)|`)/i"; classtype:web-application-attack; sid:941036; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: confirm() call"; http.uri; content:"confirm"; nocase; pcre:"/\bconfirm\s*(?:\(\s*(?:\d|['\"`]|document|window)|`)/i"; classtype:web-application-attack; sid:941046; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: String.fromCharCode"; http.uri; content:"fromcharcode"; nocase; classtype:web-application-attack; sid:941037; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: atob() decoding"; http.uri; content:"atob"; nocase; pcre:"/\batob\s*\(/i"; classtype:web-application-attack; sid:941038; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: srcdoc attribute"; http.uri; content:"srcdoc"; nocase; pcre:"/\bsrcdoc\s*=/i"; classtype:web-application-attack; sid:941040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: formaction attribute"; http.uri; content:"formaction"; nocase; pcre:"/\bformaction\s*=/i"; classtype:web-application-attack; sid:941041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: AngularJS sandbox escape"; http.uri; content:"constructor.constructor"; nocase; classtype:web-application-attack; sid:941044; rev:1;)
+
+# --- Other locations -----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: script tag in a request body (with attributes)"; http.request_body; content:"<script"; nocase; pcre:"/<script[\s>\/]/i"; classtype:web-application-attack; sid:941050; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onerror handler in a request body"; http.request_body; content:"onerror"; nocase; pcre:"/<[a-z]+[^>]*\sonerror\s*=/i"; classtype:web-application-attack; sid:941051; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: onload handler in a request body"; http.request_body; content:"onload"; nocase; pcre:"/<[a-z]+[^>]*\sonload\s*=/i"; classtype:web-application-attack; sid:941054; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: javascript: URL in a request body"; http.request_body; content:"javascript:"; nocase; classtype:web-application-attack; sid:941052; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"XSS: tag in the Referer header"; http.header; content:"referer"; nocase; pcre:"/^referer:[^\r\n]*<(?:script|svg|img|iframe)/im"; classtype:web-application-attack; sid:941053; rev:1;)

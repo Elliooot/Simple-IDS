@@ -44,7 +44,7 @@ typedef enum {
     APP_NONE               /* no parser (raw rules may still apply)    */
 } app_proto_t;
 
-#define FLOW_MAX_ALERT_SIDS 16
+#define FLOW_MAX_ALERT_SIDS 32
 
 /* Per-flow state owned by the detection engine (src/core/engine.c). */
 typedef struct {
@@ -52,6 +52,7 @@ typedef struct {
     uint8_t  done;             /* nothing more to inspect              */
     uint8_t  http_lost;        /* HTTP request tracking gave up        */
     uint8_t  overlap_alerted;
+    uint8_t  passed;           /* a pass rule matched: no more rules   */
     uint32_t scan_pos;         /* stream offset scanned by rules so far */
     uint32_t seg_start;        /* start of the current gap-free region */
     uint8_t  raw_scan;         /* raw-content rules apply to the stream */

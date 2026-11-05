@@ -454,13 +454,13 @@ def gen_stream_retransmit():
     tl.add(*c.handshake(), c.data(0, req), c.data(8, b"<script>"))
     alerts.append(alert(900005, 52001))
 
-    # Keep-alive: two requests on one connection. The signature fires once
-    # per flow; anomalies are checked for every request.
+    # Keep-alive: two requests on one connection. Rules on parsed requests
+    # fire once per request (Phase 4, as in Suricata), anomalies too.
     r1 = b"GET /?x=<script>" + REQ_TAIL
     r2 = b"GET /?y=<script> HTTP/1.1\r\nHost: t\r\nUser-Agent: X\r\n\r\n"
     c = Conn(52002)
     tl.add(*c.handshake(), c.data(0, r1), c.data(len(r1), r2))
-    alerts += [alert(1001, 52002), alert(900003, 52002)]
+    alerts += [alert(1001, 52002), alert(1001, 52002), alert(900003, 52002)]
 
     # POST with a body: the next request starts after Content-Length bytes.
     body = b"GET /looks-like-a-request-but-is-body"
@@ -783,6 +783,82 @@ def gen_evasion():
          tl.packets, alerts)
 
 
+RULES_V2 = r"""# Written by tests/regression/gen_pcaps.py for rules_v2.pcap
+# Rule language v2 end to end; run with --var HOME_NET=[10.0.0.0/24].
+var TRUSTED_SCANNERS [10.0.9.0/24]
+alert http any any -> $HOME_NET any (msg:"v2 pcre: UNION SELECT with any whitespace"; \
+    http.uri; content:"union"; nocase; pcre:"/union\s+select/i"; sid:100;)
+alert http any any -> !$HOME_NET any (msg:"v2 variables: never matches, HOME_NET is the server"; \
+    http.uri; content:"union"; nocase; sid:106;)
+alert http any any -> any any (msg:"v2 relative: quote within 10 bytes of id="; \
+    http.uri; content:"id="; content:"'"; distance:0; within:10; sid:101;)
+alert http any any -> any any (msg:"v2 detection_filter: login brute force"; \
+    http.method; content:"POST"; startswith; endswith; http.uri; content:"/login"; \
+    http.request_body; content:"password="; \
+    detection_filter:track by_src, count 3, seconds 60; sid:102;)
+alert http any any -> any any (msg:"v2 threshold: noisy scanner, once a minute"; \
+    http.user_agent; content:"scanbot"; threshold:type limit, track by_src, count 1, seconds 60; sid:103;)
+pass http $TRUSTED_SCANNERS any -> any any (msg:"v2 pass: our own scanner"; \
+    http.user_agent; content:"scanbot"; sid:104;)
+alert tcp any any -> any 21 (msg:"v2 raw: FTP SITE EXEC"; flow:established; \
+    content:"SITE"; startswith; content:"EXEC"; nocase; distance:1; within:5; sid:105;)
+"""
+
+
+def gen_rules_v2():
+    """Rule language v2 end to end: pcre, relative content, variables,
+    detection_filter, threshold, pass, raw TCP rules with flow."""
+    tl, alerts = Timeline(), []
+    rules_path = os.path.join(OUT_DIR, "rules_v2.rules")
+    with open(rules_path, "w") as f:
+        f.write(RULES_V2)
+
+    def conn(cport, payload, sids=(), client=CLIENT, sport=80):
+        c = Conn(cport, client=client, sport=sport)
+        tl.add(*c.handshake())
+        tl.add(c.data(0, payload))
+        alerts.extend(alert(s, cport, sport, client) for s in sids)
+
+    def get(target, ua="TestClient/1.0"):
+        return f"GET {target} HTTP/1.1\r\nHost: t\r\nUser-Agent: {ua}\r\n\r\n".encode()
+
+    def login(n):
+        body = f"user=admin&password=guess{n}".encode()
+        return (b"POST /login HTTP/1.1\r\nHost: t\r\nUser-Agent: TestClient/1.0\r\n"
+                b"Content-Type: application/x-www-form-urlencoded\r\n"
+                b"Content-Length: %d\r\n\r\n" % len(body) + body)
+
+    conn(61000, get("/?q=1%09UNION%0aSELECT%202"), {100})
+    conn(61001, get("/item?id=5'--"), {101})
+    conn(61002, get("/item?id=5&comment=hello+it's"))          # quote too far away
+
+    # Brute force: the 4th and 5th login from one source alert; another
+    # source with two attempts stays below the count.
+    for i in range(5):
+        conn(61010 + i, login(i), {102} if i >= 3 else (), client="10.0.0.7")
+    for i in range(2):
+        conn(61015 + i, login(i), client="10.0.0.8")
+
+    # limit: three scanner requests, one alert.
+    for i in range(3):
+        conn(61020 + i, get("/", ua="scanbot/2.0"), {103} if i == 0 else (), client="10.0.0.20")
+
+    # pass: the trusted scanner's flow is not inspected any more, even for
+    # a later request that would match sid 100.
+    c = Conn(61030, client="10.0.9.5")
+    first, second = get("/", ua="scanbot/2.0"), get("/?q=union select 1", ua="scanbot/2.0")
+    tl.add(*c.handshake())
+    tl.add(c.data(0, first), c.data(len(first), second))
+
+    # Raw TCP rule on port 21: EXEC must follow SITE within the window.
+    conn(61040, b"SITE EXEC /bin/id\r\n", {105}, sport=21)
+    conn(61041, b"SITE CHMOD 777 EXEC\r\n", sport=21)
+
+    emit("rules_v2", "Rule language v2: pcre, distance/within, variables, threshold, "
+         "detection_filter, pass, raw TCP with flow", tl.packets, alerts,
+         args=["-R", "tests/pcaps/rules_v2.rules", "--var", "HOME_NET=[10.0.0.0/24]", "-f", ""])
+
+
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     print(f"Writing pcaps to {OUT_DIR}")
@@ -806,6 +882,7 @@ def main():
     gen_dns()
     gen_tls_fingerprint()
     gen_evasion()
+    gen_rules_v2()
 
 
 if __name__ == "__main__":

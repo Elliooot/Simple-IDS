@@ -20,9 +20,11 @@ static void test_http_request_line(void) {
 static void test_http_methods(void) {
     static const char *ok[] = { "GET / HTTP/1.0", "POST /", "PUT /", "DELETE /",
                                 "HEAD /", "OPTIONS *", "PATCH /", "TRACE /",
-                                "CONNECT host:443 HTTP/1.1", NULL };
+                                "CONNECT host:443 HTTP/1.1", "PROPFIND /dav/ HTTP/1.1",
+                                "MKCOL /dav/x HTTP/1.1", "UNLOCK /dav/x HTTP/1.1", NULL };
     static const char *bad[] = { "GETX / HTTP/1.1", "get / HTTP/1.1", "GET", "GET",
-                                 "\x16\x03\x01", "", "BREW /pot HTTP/1.1", NULL };
+                                 "\x16\x03\x01", "", "BREW /pot HTTP/1.1",
+                                 "PROPFINDX / HTTP/1.1", NULL };
     http_request_t req;
     for (int i = 0; ok[i]; i++) {
         size_t n;

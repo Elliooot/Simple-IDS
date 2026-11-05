@@ -3,8 +3,11 @@
 #include "simpleids/bytes.h"
 #include "simpleids/http.h"
 
+/* RFC 9110 methods plus WebDAV (RFC 4918), which servers such as IIS and
+ * Apache mod_dav accept and attackers probe for. */
 static const char *const METHODS[] = {
-    "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE", NULL
+    "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH", "CONNECT", "TRACE",
+    "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK", NULL
 };
 
 /* Length of the line starting at p (excluding CR/LF), bounded by len. */

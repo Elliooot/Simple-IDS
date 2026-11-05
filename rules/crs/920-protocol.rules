@@ -1,0 +1,24 @@
+# SimpleIDS rule library: protocol enforcement.
+#
+# Grouped like OWASP CRS REQUEST-920-PROTOCOL-ENFORCEMENT (methods,
+# headers and restricted file extensions). Written for SimpleIDS; samples
+# in tests/rules/samples.py.
+
+# --- Methods -------------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: TRACE method (cross-site tracing)"; http.method; content:"TRACE"; startswith; endswith; classtype:attempted-recon; sid:920001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: WebDAV PROPFIND"; http.method; content:"PROPFIND"; startswith; endswith; classtype:web-application-activity; priority:3; sid:920004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: PUT of a server-side script"; http.method; content:"PUT"; startswith; endswith; http.uri; pcre:"/\.(?:php\d?|phtml|jspx?|aspx?|ashx|cgi|pl)(?:$|[?\;])/i"; classtype:web-application-attack; sid:920005; rev:1;)
+
+# --- Headers -------------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: Proxy request header (httpoxy)"; http.header; content:"proxy:"; nocase; pcre:"/^proxy:/im"; reference:cve,2016-5385; classtype:web-application-attack; sid:920010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: Range header with many ranges (Apache Killer)"; http.header; content:"range:"; nocase; pcre:"/^range:\s*bytes=(?:[^,\r\n]*,){10}/im"; reference:cve,2011-3192; classtype:attempted-dos; sid:920011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: X-Original-URL header (access control bypass)"; http.header; content:"x-original-url:"; nocase; pcre:"/^x-original-url:/im"; classtype:web-application-attack; sid:920012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: X-Rewrite-URL header (access control bypass)"; http.header; content:"x-rewrite-url:"; nocase; pcre:"/^x-rewrite-url:/im"; classtype:web-application-attack; sid:920013; rev:1;)
+
+# --- Restricted file extensions (backups, dumps, editor files) -----------
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: backup file request (.bak)"; http.uri; content:".bak"; nocase; pcre:"/\.bak(?:$|\?)/i"; classtype:attempted-recon; sid:920020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: editor swap file request (.swp)"; http.uri; content:".swp"; nocase; pcre:"/\.swp(?:$|\?)/i"; classtype:attempted-recon; sid:920022; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: SQL dump request (.sql)"; http.uri; content:".sql"; nocase; pcre:"/\.sql(?:\.gz|\.zip)?(?:$|\?)/i"; classtype:attempted-recon; sid:920023; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: configuration file request (.ini)"; http.uri; content:".ini"; nocase; pcre:"/\.ini(?:$|\?)/i"; classtype:attempted-recon; sid:920025; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: log file request (.log)"; http.uri; content:".log"; nocase; pcre:"/\.log(?:$|\?)/i"; classtype:attempted-recon; sid:920026; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"PROTOCOL: site backup archive request"; http.uri; content:"backup."; nocase; pcre:"/\/(?:site|www|web|db)?[_-]?backup\.(?:zip|tar|tgz|gz|rar|7z|sql)(?:$|\?)/i"; classtype:attempted-recon; sid:920027; rev:1;)

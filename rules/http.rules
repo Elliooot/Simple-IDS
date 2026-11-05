@@ -18,11 +18,11 @@ alert http any any -> any any (msg:"XSS: Script tag in a header"; http.header; c
 
 # SQL Injection
 alert http any any -> any any (msg:"SQL Injection: Classic OR bypass"; http.uri; content:"' OR 1=1"; nocase; sid:2001; priority:1;)
-alert http any any -> any any (msg:"SQL Injection: UNION attack"; http.uri; content:"UNION SELECT"; nocase; sid:2002; priority:1;)
+alert http any any -> any any (msg:"SQL Injection: UNION attack"; http.uri; content:"UNION"; nocase; pcre:"/union(?:\s|\/\*.*?\*\/)+(?:all(?:\s|\/\*.*?\*\/)+)?select/i"; sid:2002; rev:2; priority:1;)
 alert http any any -> any any (msg:"SQL Injection: DROP TABLE command"; http.uri; content:"DROP TABLE"; nocase; sid:2003; priority:1;)
 alert http any any -> any any (msg:"SQL Injection: Code execution"; http.uri; content:"exec("; nocase; sid:2004; priority:1;)
 alert http any any -> any any (msg:"SQL Injection: OR bypass in request body"; http.request_body; content:"' OR 1=1"; nocase; sid:2011; priority:1;)
-alert http any any -> any any (msg:"SQL Injection: UNION attack in request body"; http.request_body; content:"UNION SELECT"; nocase; sid:2012; priority:1;)
+alert http any any -> any any (msg:"SQL Injection: UNION attack in request body"; http.request_body; content:"UNION"; nocase; pcre:"/union(?:\s|\/\*.*?\*\/)+(?:all(?:\s|\/\*.*?\*\/)+)?select/i"; sid:2012; rev:2; priority:1;)
 
 # Command Injection
 alert http any any -> any any (msg:"Command Injection: Windows CMD"; http.uri; content:"cmd.exe"; nocase; sid:3001; priority:1;)

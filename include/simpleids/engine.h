@@ -30,6 +30,9 @@ typedef struct {
     unsigned long signature_alerts;
     unsigned long anomaly_alerts;
     unsigned long duplicate_alerts;   /* same sid again in one flow */
+    unsigned long thresholded;        /* suppressed by threshold /
+                                         detection_filter          */
+    unsigned long passed_flows;       /* a pass rule matched       */
 } engine_stats_t;
 
 void engine_config_defaults(engine_config_t *cfg);

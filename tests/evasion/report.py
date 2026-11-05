@@ -34,7 +34,8 @@ THRESHOLD = 0.95
 def run(binary):
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "alerts.json")
-        proc = subprocess.run([binary, "-r", PCAP, "-l", log, "-q"],
+        # Core rules only, like the evasion.pcap regression run.
+        proc = subprocess.run([binary, "-r", PCAP, "-l", log, "-q", "-R", "rules"],
                               cwd=REPO, capture_output=True, text=True)
         if proc.returncode != 0:
             sys.exit(f"SimpleIDS exited with {proc.returncode}\n{proc.stderr}")

@@ -2,6 +2,9 @@
 #
 #   make            build ./SimpleIDS
 #   make test       unit tests + pcap regression tests + evasion report
+#                   + CLI tests (--test-rules, SIGHUP reload)
+#                   + rule library test (one sample per rule, clean corpus)
+#   make bench      throughput with 10 rules vs. all rules (Phase 4 acceptance)
 #   make asan       build and run all tests with AddressSanitizer + UBSan
 #   make pcaps      regenerate tests/pcaps from tests/regression/gen_pcaps.py
 #   make run        build and capture live (sudo)
@@ -15,6 +18,12 @@ PYTHON  ?= python3
 CFLAGS  ?= -O2
 CFLAGS  += -std=gnu11 -Wall -Wextra -Wshadow -Wformat=2 -Iinclude -MMD -MP
 LDLIBS  += -lpcap
+
+# PCRE2 (8-bit): pkg-config, else pcre2-config, else the default paths.
+PCRE2_CFLAGS := $(shell pkg-config --cflags libpcre2-8 2>/dev/null || pcre2-config --cflags 2>/dev/null)
+PCRE2_LIBS   := $(shell pkg-config --libs libpcre2-8 2>/dev/null || pcre2-config --libs8 2>/dev/null || echo -lpcre2-8)
+CFLAGS  += $(PCRE2_CFLAGS)
+LDLIBS  += $(PCRE2_LIBS)
 
 ifeq ($(WERROR),1)
 CFLAGS  += -Werror
@@ -40,7 +49,10 @@ LIB_SRC := src/util/bytes.c \
            src/app/http/http.c \
            src/app/tls/tls.c \
            src/app/dns/dns.c \
-           src/detect/rules.c \
+           src/detect/mpm.c \
+           src/detect/threshold.c \
+           src/detect/rule_parse.c \
+           src/detect/detect.c \
            src/anomaly/anomaly.c \
            src/output/output.c \
            src/core/engine.c
@@ -52,7 +64,7 @@ MAIN_OBJ := $(MAIN_SRC:%.c=$(BUILD)/%.o)
 TEST_OBJ := $(TEST_SRC:%.c=$(BUILD)/%.o)
 UNIT_BIN := $(BUILD)/unit_tests
 
-.PHONY: all test unit regression evasion asan pcaps run clean
+.PHONY: all test unit regression evasion cli library bench asan pcaps run clean
 
 all: $(BIN)
 
@@ -75,7 +87,16 @@ regression: $(BIN)
 evasion: $(BIN)
 	$(PYTHON) tests/evasion/report.py --bin ./$(BIN)
 
-test: unit regression evasion
+cli: $(BIN)
+	$(PYTHON) tests/cli/test_cli.py --bin ./$(BIN)
+
+library: $(BIN)
+	$(PYTHON) tests/rules/test_library.py --bin ./$(BIN)
+
+test: unit regression evasion cli library
+
+bench: $(BIN)
+	$(PYTHON) tests/bench/bench.py --bin ./$(BIN)
 
 asan:
 	$(MAKE) SAN=1 test

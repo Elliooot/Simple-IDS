@@ -23,9 +23,13 @@ typedef struct {
     uint16_t       dst_port;
     uint64_t       flow_id;     /* 0 when not tied to a flow            */
     const char    *app_proto;   /* "http", "tls" or NULL                */
+    const char    *proto;       /* "TCP" or "UDP" (NULL: "TCP")         */
     int            sid;
+    int            rev;         /* signature revision, 0 when unset     */
     int            priority;
     const char    *msg;
+    const char    *category;    /* classtype, or NULL                   */
+    const char    *action;      /* "alert" / "drop" (NULL: "alert")     */
     alert_source_t source;
     const uint8_t *data;        /* inspected data (stream bytes or SNI) */
     size_t         data_len;

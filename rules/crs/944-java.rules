@@ -1,0 +1,39 @@
+# SimpleIDS rule library: Java attacks.
+#
+# Grouped like OWASP CRS REQUEST-944-APPLICATION-ATTACK-JAVA: Log4Shell
+# lookups, Spring, OGNL / SpEL / EL expression injection and Java
+# deserialization. Written for SimpleIDS; samples in tests/rules/samples.py.
+
+# --- Log4Shell (JNDI lookups) --------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Log4Shell JNDI lookup in the request target"; http.uri; content:"${jndi:"; nocase; reference:cve,2021-44228; classtype:attempted-admin; sid:944001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Log4Shell JNDI lookup in a header"; http.header; content:"${jndi:"; nocase; reference:cve,2021-44228; classtype:attempted-admin; sid:944002; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Log4Shell JNDI lookup in a request body"; http.request_body; content:"${jndi:"; nocase; reference:cve,2021-44228; classtype:attempted-admin; sid:944003; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Log4Shell default-value obfuscation in a header"; http.header; content:"${::-"; reference:cve,2021-44228; classtype:attempted-admin; sid:944004; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Log4j case lookup obfuscation in a header"; http.header; content:"${"; pcre:"/\$\{(?:lower|upper):/i"; content:"er:"; nocase; fast_pattern; reference:cve,2021-44228; classtype:attempted-admin; sid:944006; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Log4j env lookup in a header (secret exfiltration)"; http.header; content:"${env:"; nocase; reference:cve,2021-45046; classtype:attempted-admin; sid:944007; rev:1;)
+
+# --- Spring --------------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Spring4Shell class.module.classLoader in the request target"; http.uri; content:"class.module.classloader"; nocase; reference:cve,2022-22965; classtype:attempted-admin; sid:944010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Spring4Shell class.module.classLoader in a request body"; http.request_body; content:"class.module.classloader"; nocase; reference:cve,2022-22965; classtype:attempted-admin; sid:944011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Spring Cloud Function routing expression header"; http.header; content:"spring.cloud.function.routing-expression"; nocase; reference:cve,2022-22963; classtype:attempted-admin; sid:944013; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: SpEL type reference T(java.lang...)"; http.uri; content:"java.lang"; nocase; pcre:"/T\s*\(\s*java\.lang\./i"; classtype:attempted-admin; sid:944014; rev:1;)
+
+# --- Runtime and process classes ----------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: java.lang.Runtime in the request target"; http.uri; content:"java.lang.runtime"; nocase; classtype:attempted-admin; sid:944020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: java.lang.Runtime in a request body"; http.request_body; content:"java.lang.runtime"; nocase; classtype:attempted-admin; sid:944021; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: ProcessBuilder in the request target"; http.uri; content:"processbuilder"; nocase; classtype:attempted-admin; sid:944022; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: getRuntime().exec"; http.uri; content:"getruntime"; nocase; pcre:"/getruntime\s*\(\s*\)\s*\.\s*exec/i"; classtype:attempted-admin; sid:944024; rev:1;)
+
+# --- OGNL and EL expression injection -----------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: OGNL expression in the request target"; http.uri; content:"%{("; classtype:attempted-admin; sid:944030; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: OGNL expression in a header (Struts Content-Type)"; http.header; content:"%{("; reference:cve,2017-5638; classtype:attempted-admin; sid:944031; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: OGNL _memberAccess"; http.uri; content:"_memberaccess"; nocase; classtype:attempted-admin; sid:944032; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: OGNL in the path (Confluence)"; http.uri; content:"${(#"; reference:cve,2022-26134; classtype:attempted-admin; sid:944034; rev:1;)
+
+# --- Deserialization -----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: base64 serialized object in a request body"; http.request_body; content:"rO0AB"; classtype:attempted-admin; sid:944040; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: base64 serialized object in a cookie"; http.cookie; content:"rO0AB"; classtype:attempted-admin; sid:944041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: serialized object stream in a request body"; http.request_body; content:"|ac ed 00 05|"; startswith; classtype:attempted-admin; sid:944042; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: TemplatesImpl gadget class"; http.request_body; content:"templatesimpl"; nocase; classtype:attempted-admin; sid:944044; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: Fastjson @type with a class name"; http.request_body; content:"\"@type\""; pcre:"/\"@type\"\s*:\s*\"[a-z]+\.[a-z]+\./i"; classtype:attempted-admin; sid:944045; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"JAVA: JdbcRowSetImpl JNDI gadget"; http.request_body; content:"jdbcrowsetimpl"; nocase; classtype:attempted-admin; sid:944046; rev:1;)

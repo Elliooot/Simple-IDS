@@ -3,7 +3,7 @@
 pcap regression runner.
 
 For every tests/pcaps/NAME.pcap, runs
-    SimpleIDS -r NAME.pcap -l <tmp log> -q
+    SimpleIDS -r NAME.pcap -l <tmp log> -q -R rules [ARGS from the .json]
 and checks that
   * the process exits with status 0 (sanitizer reports make it fail),
   * every log line is valid JSON with the expected fields (B10),
@@ -11,7 +11,10 @@ and checks that
     "alerts" list in NAME.expected.json.
 
 Usage: python3 tests/regression/run.py [--bin ./SimpleIDS] [NAME ...]
-Run from the repo root (rules are loaded from rules/*.rules).
+The pcaps test the engine with the core rules in rules/*.rules: unless
+the expected file's "args" name rules with -R, `-R rules` is added. The
+rule library in rules/crs/ has its own test (tests/rules/test_library.py),
+so library changes do not ripple into these expectations.
 """
 
 import argparse
@@ -37,7 +40,10 @@ def key(a):
 def run_one(binary, pcap, expected):
     with tempfile.TemporaryDirectory() as tmp:
         log = os.path.join(tmp, "alerts.json")
-        proc = subprocess.run([binary, "-r", pcap, "-l", log, "-q"] + expected.get("args", []),
+        args = expected.get("args", [])
+        if "-R" not in args:
+            args = ["-R", "rules"] + args
+        proc = subprocess.run([binary, "-r", pcap, "-l", log, "-q"] + args,
                               cwd=REPO, capture_output=True, text=True)
         errors = []
         if proc.returncode != 0:

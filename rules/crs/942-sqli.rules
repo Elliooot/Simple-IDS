@@ -1,0 +1,63 @@
+# SimpleIDS rule library: SQL, NoSQL and LDAP injection.
+#
+# Grouped like OWASP CRS REQUEST-942-APPLICATION-ATTACK-SQLI (CRS puts
+# LDAP injection in 921 and NoSQL in 942; here both sit with SQL). The
+# pcre conditions accept the whitespace and comment tricks that a plain
+# substring misses (UNION%09SELECT, UNION/**/SELECT). Written for
+# SimpleIDS; samples in tests/rules/samples.py.
+
+# --- UNION based ---------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: UNION SELECT with whitespace or comments"; http.uri; content:"union"; nocase; pcre:"/union(?:\s|\/\*.*?\*\/|\()+(?:(?:all|distinct)(?:\s|\/\*.*?\*\/)+)?\(?select\b/i"; classtype:web-application-attack; sid:942001; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: UNION SELECT in a request body"; http.request_body; content:"union"; nocase; pcre:"/union(?:\s|\/\*.*?\*\/|\()+(?:(?:all|distinct)(?:\s|\/\*.*?\*\/)+)?\(?select\b/i"; classtype:web-application-attack; sid:942002; rev:1;)
+
+# --- Tautologies and comment terminators ---------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: numeric tautology (or 1=1)"; http.uri; content:"1=1"; pcre:"/\b(?:or|and|xor|\|\||&&)\s*1=1\b/i"; classtype:web-application-attack; sid:942010; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: string tautology ('a'='a)"; http.uri; content:"'='"; pcre:"/'\s*(?:or|\|\|)\s*'([^']*)'='\1/i"; classtype:web-application-attack; sid:942011; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: string tautology in a request body"; http.request_body; content:"'='"; pcre:"/'\s*(?:or|\|\|)\s*'([^']*)'='\1/i"; classtype:web-application-attack; sid:942012; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: quote followed by a comment (admin'--)"; http.uri; content:"'--"; classtype:web-application-attack; sid:942014; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: boolean blind (' and N=)"; http.uri; content:"' and"; nocase; pcre:"/'\s*and\s+\d+\s*[=<>]/i"; classtype:web-application-attack; sid:942016; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: MySQL versioned comment"; http.uri; content:"/*!"; classtype:web-application-attack; sid:942017; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: ORDER BY column probe"; http.uri; content:"order"; nocase; pcre:"/order\s+by\s+\d+\s*(?:--|#|\/\*)/i"; classtype:web-application-attack; sid:942018; rev:1;)
+
+# --- Time based ----------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: sleep()"; http.uri; content:"sleep"; nocase; pcre:"/\bsleep\s*\(\s*\d+(?:\.\d+)?\s*\)/i"; classtype:web-application-attack; sid:942020; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: benchmark()"; http.uri; content:"benchmark"; nocase; pcre:"/benchmark\s*\(\s*\d+\s*,/i"; classtype:web-application-attack; sid:942021; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: pg_sleep()"; http.uri; content:"pg_sleep"; nocase; classtype:web-application-attack; sid:942022; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: WAITFOR DELAY"; http.uri; content:"waitfor"; nocase; pcre:"/waitfor\s+(?:delay|time)\s+'/i"; classtype:web-application-attack; sid:942023; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: Oracle DBMS_PIPE.RECEIVE_MESSAGE"; http.uri; content:"dbms_pipe"; nocase; classtype:web-application-attack; sid:942024; rev:1;)
+
+# --- Schema discovery and error based -----------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: information_schema"; http.uri; content:"information_schema"; nocase; classtype:web-application-attack; sid:942030; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: @@version"; http.uri; content:"@@version"; nocase; classtype:web-application-attack; sid:942031; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: database() call"; http.uri; content:"database"; nocase; pcre:"/\bdatabase\s*\(\s*\)/i"; classtype:web-application-attack; sid:942032; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: version() call"; http.uri; content:"version"; nocase; pcre:"/\bversion\s*\(\s*\)/i"; classtype:web-application-attack; sid:942047; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: MSSQL sysobjects"; http.uri; content:"sysobjects"; nocase; classtype:web-application-attack; sid:942036; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: extractvalue() error based"; http.uri; content:"extractvalue"; nocase; classtype:web-application-attack; sid:942038; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: updatexml() error based"; http.uri; content:"updatexml"; nocase; classtype:web-application-attack; sid:942039; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: char() chain"; http.uri; content:"char"; nocase; pcre:"/\bchar\s*\(\s*\d+\s*(?:,\s*\d+\s*){2,}\)/i"; classtype:web-application-attack; sid:942041; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: long hex literal"; http.uri; content:"=0x"; nocase; pcre:"/=0x[0-9a-f]{16,}/i"; classtype:web-application-attack; sid:942042; rev:1;)
+
+# --- File access and command execution -----------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: load_file()"; http.uri; content:"load_file"; nocase; classtype:web-application-attack; sid:942050; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: INTO OUTFILE"; http.uri; content:"outfile"; nocase; pcre:"/into\s+outfile\s/i"; classtype:web-application-attack; sid:942051; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: INTO DUMPFILE"; http.uri; content:"dumpfile"; nocase; pcre:"/into\s+dumpfile\s/i"; classtype:web-application-attack; sid:942052; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: xp_cmdshell"; http.uri; content:"xp_cmdshell"; nocase; classtype:web-application-attack; sid:942054; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: xp_dirtree (out-of-band)"; http.uri; content:"xp_dirtree"; nocase; classtype:web-application-attack; sid:942055; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: Oracle UTL_HTTP / UTL_INADDR (out-of-band)"; http.uri; content:"utl_"; nocase; pcre:"/utl_(?:http|inaddr|tcp|smtp)\b/i"; classtype:web-application-attack; sid:942057; rev:1;)
+
+# --- Stacked queries -----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: stacked SHUTDOWN"; http.uri; content:"shutdown"; nocase; pcre:"/\;\s*shutdown\b/i"; classtype:web-application-attack; sid:942060; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: stacked INSERT INTO"; http.uri; content:"insert"; nocase; pcre:"/\;\s*insert\s+into\s/i"; classtype:web-application-attack; sid:942064; rev:1;)
+
+# --- Other locations -----------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: quote and OR in a cookie"; http.cookie; content:"' or"; nocase; classtype:web-application-attack; sid:942070; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"SQLI: injection in X-Forwarded-For"; http.header; content:"x-forwarded-for"; nocase; pcre:"/^x-forwarded-for:[^\r\n]*(?:'|sleep\s*\(|select\s)/im"; classtype:web-application-attack; sid:942071; rev:1;)
+
+# --- NoSQL (MongoDB operators) -------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"NOSQLI: $ne operator in a parameter"; http.uri; content:"[$ne]"; classtype:web-application-attack; sid:942080; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"NOSQLI: $where operator"; http.uri; content:"$where"; classtype:web-application-attack; sid:942083; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"NOSQLI: $ne operator in a JSON body"; http.request_body; content:"\"$ne\""; pcre:"/\"\$ne\"\s*:/"; classtype:web-application-attack; sid:942084; rev:1;)
+alert http any any -> $HTTP_SERVERS any (msg:"NOSQLI: $where operator in a JSON body"; http.request_body; content:"\"$where\""; pcre:"/\"\$where\"\s*:/"; classtype:web-application-attack; sid:942086; rev:1;)
+
+# --- LDAP ----------------------------------------------------------------
+alert http any any -> $HTTP_SERVERS any (msg:"LDAPI: filter injection"; http.uri; content:"*)("; classtype:web-application-attack; sid:942090; rev:1;)
