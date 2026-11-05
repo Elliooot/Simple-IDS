@@ -123,6 +123,29 @@ typedef struct {
     uint8_t proto;
 } l3_info_t;
 
+/* Dotted quad without sprintf: inet_ntop formats IPv4 with sprintf,
+ * which showed up at ~10% of the time per packet. out: >= 16 bytes. */
+static void ipv4_str(const uint8_t a[4], char *out) {
+    char *p = out;
+    for (int i = 0; i < 4; i++) {
+        unsigned v = a[i];
+        if (v >= 100) { *p++ = (char)('0' + v / 100); v %= 100; *p++ = (char)('0' + v / 10); }
+        else if (v >= 10) *p++ = (char)('0' + v / 10);
+        *p++ = (char)('0' + v % 10);
+        if (i < 3) *p++ = '.';
+    }
+    *p = '\0';
+}
+
+void decode_addr_str(uint8_t ip_version, const uint8_t addr[16], char *out, size_t outlen) {
+    if (outlen < IP_STR_LEN) {
+        if (outlen) out[0] = '\0';
+        return;
+    }
+    if (ip_version == 4) ipv4_str(addr, out);
+    else inet_ntop(AF_INET6, addr, out, (socklen_t)outlen);
+}
+
 static decode_result_t decode_ipv4(const uint8_t *ip, size_t avail, packet_t *out,
                                    l3_info_t *l3) {
     if (avail < IPV4_MIN_HDR) return DECODE_TRUNCATED;
@@ -138,8 +161,8 @@ static decode_result_t decode_ipv4(const uint8_t *ip, size_t avail, packet_t *ou
     out->ip_version = 4;
     memcpy(out->src_addr, ip + 12, 4);
     memcpy(out->dst_addr, ip + 16, 4);
-    inet_ntop(AF_INET, ip + 12, out->src_ip, sizeof(out->src_ip));
-    inet_ntop(AF_INET, ip + 16, out->dst_ip, sizeof(out->dst_ip));
+    ipv4_str(ip + 12, out->src_ip);
+    ipv4_str(ip + 16, out->dst_ip);
 
     l3->l4_off = ihl;
     l3->l4_wire = total - ihl;

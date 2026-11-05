@@ -69,6 +69,42 @@ static void test_rate_table_eviction(void) {
     CHECK_EQ_INT(anomaly_tracked_ips(), ANOMALY_MAX_IPS);
 }
 
+/*
+ * The rate table is a hash with an LRU list: a source that was just seen
+ * survives eviction, and lookups stay correct after many removals.
+ */
+static void test_rate_table_lru(void) {
+    char ip[32];
+    anomaly_reset();
+    for (int i = 0; i < ANOMALY_RATE_THRESHOLD - 1; i++)
+        CHECK_EQ_INT(send_req("172.16.0.1", 1000, PLAIN), 0);
+    for (int i = 0; i < ANOMALY_MAX_IPS - 1; i++) {
+        snprintf(ip, sizeof(ip), "10.2.%d.%d", i / 256, i % 256);
+        CHECK_EQ_INT(send_req(ip, 1000, PLAIN), 0);
+    }
+    /* 172.16.0.1 is the oldest entry; touching it makes it the newest. */
+    CHECK_EQ_INT(send_req("172.16.0.1", 1000, PLAIN), 0);     /* 100th */
+    CHECK_EQ_INT(send_req("192.168.1.1", 1000, PLAIN), 0);    /* evicts 10.2.0.0 */
+    CHECK_EQ_INT(anomaly_evictions(), 1);
+    CHECK_EQ_INT(send_req("172.16.0.1", 1000, PLAIN), 1);     /* 101st: kept */
+
+    /* Churn: thousands of new sources, each evicting the oldest. */
+    for (int i = 0; i < 4000; i++) {
+        snprintf(ip, sizeof(ip), "10.3.%d.%d", i / 256, i % 256);
+        CHECK_EQ_INT(send_req(ip, 1000, PLAIN), 0);
+    }
+    CHECK_EQ_INT(anomaly_tracked_ips(), ANOMALY_MAX_IPS);
+    CHECK_EQ_INT(anomaly_evictions(), 4001);
+    /* The newest source is still found with its count (1 so far). */
+    for (int i = 0; i < ANOMALY_RATE_THRESHOLD - 1; i++)
+        CHECK_EQ_INT(send_req("10.3.15.159", 1000, PLAIN), 0);
+    CHECK_EQ_INT(send_req("10.3.15.159", 1000, PLAIN), 1);
+    /* An evicted source starts over at 1. */
+    CHECK_EQ_INT(send_req("10.3.0.0", 1000, PLAIN), 0);
+    anomaly_reset();
+    CHECK_EQ_INT(anomaly_tracked_ips(), 0);
+}
+
 static void test_long_url(void) {
     char req[2100];
     anomaly_reset();
@@ -114,6 +150,7 @@ const test_case_t anomaly_tests[] = {
     TEST(test_rate_threshold),
     TEST(test_rate_window_resets),
     TEST(test_rate_table_eviction),
+    TEST(test_rate_table_lru),
     TEST(test_long_url),
     TEST(test_user_agent),
     TEST(test_messages_are_clean),

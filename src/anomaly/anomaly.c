@@ -5,6 +5,7 @@
 #include "simpleids/bytes.h"
 #include "simpleids/decode.h"
 #include "simpleids/http.h"
+#include "simpleids/siphash.h"
 
 /* ------------------------------------------------------------------ */
 /* Request rate per source IP                                          */
@@ -15,14 +16,25 @@ typedef struct {
     int    count;
     time_t window_start;
     time_t last_seen;
+    int    hnext;            /* hash chain: next index + 1, 0 = end    */
+    int    older, newer;     /* LRU list by last use, -1 = end         */
 } ip_rate_t;
 
+/* A power of two, twice the table size: chains stay short. */
+#define RATE_BUCKETS (2 * ANOMALY_MAX_IPS)
+
 static ip_rate_t g_rate[ANOMALY_MAX_IPS];
+static int g_bucket[RATE_BUCKETS];   /* first index + 1, 0 = empty */
+static int g_oldest = -1, g_newest = -1;
 static int g_rate_count = 0;
 static unsigned long g_evictions = 0;
+static uint8_t g_key[16];
+static int g_key_set;
 
 void anomaly_reset(void) {
     memset(g_rate, 0, sizeof(g_rate));
+    memset(g_bucket, 0, sizeof(g_bucket));
+    g_oldest = g_newest = -1;
     g_rate_count = 0;
     g_evictions = 0;
 }
@@ -35,30 +47,68 @@ unsigned long anomaly_evictions(void) {
     return g_evictions;
 }
 
+/* Keyed (SipHash) so that sources chosen by an attacker cannot all land
+ * in one chain. */
+static unsigned bucket_of(const char *ip) {
+    if (!g_key_set) {
+        if (random_bytes(g_key, sizeof(g_key)) < 0) memset(g_key, 0x5a, sizeof(g_key));
+        g_key_set = 1;
+    }
+    return (unsigned)siphash24(g_key, ip, strlen(ip)) & (RATE_BUCKETS - 1);
+}
+
+static void lru_unlink(int i) {
+    ip_rate_t *e = &g_rate[i];
+    if (e->older >= 0) g_rate[e->older].newer = e->newer; else g_oldest = e->newer;
+    if (e->newer >= 0) g_rate[e->newer].older = e->older; else g_newest = e->older;
+}
+
+static void lru_push_newest(int i) {
+    g_rate[i].older = g_newest;
+    g_rate[i].newer = -1;
+    if (g_newest >= 0) g_rate[g_newest].newer = i; else g_oldest = i;
+    g_newest = i;
+}
+
+static void hash_remove(int i) {
+    int *pp = &g_bucket[bucket_of(g_rate[i].ip)];
+    while (*pp != i + 1) pp = &g_rate[*pp - 1].hnext;
+    *pp = g_rate[i].hnext;
+}
+
 /*
- * Find or create the entry for src_ip. When the table is full, the entry
- * that has been idle the longest is reused, so new sources are always
- * tracked (an attacker cannot blind the check by filling the table).
- * Linear scan: fine for 1024 entries; a hash table comes with Phase 2.
+ * Find or create the entry for src_ip. When the table is full, the least
+ * recently seen source is reused, so new sources are always tracked (an
+ * attacker cannot blind the check by filling the table). Hash lookup plus
+ * an LRU list: O(1) per request instead of a scan of the whole table.
  */
 static ip_rate_t *rate_entry(const char *src_ip, time_t now) {
-    int lru = 0;
-    for (int i = 0; i < g_rate_count; i++) {
-        if (strcmp(g_rate[i].ip, src_ip) == 0) return &g_rate[i];
-        if (g_rate[i].last_seen < g_rate[lru].last_seen) lru = i;
+    unsigned b = bucket_of(src_ip);
+    for (int i = g_bucket[b] - 1; i >= 0; i = g_rate[i].hnext - 1) {
+        if (strcmp(g_rate[i].ip, src_ip) == 0) {
+            lru_unlink(i);
+            lru_push_newest(i);
+            return &g_rate[i];
+        }
     }
 
-    ip_rate_t *e;
+    int i;
     if (g_rate_count < ANOMALY_MAX_IPS) {
-        e = &g_rate[g_rate_count++];
+        i = g_rate_count++;
     } else {
-        e = &g_rate[lru];
+        i = g_oldest;
+        lru_unlink(i);
+        hash_remove(i);
         g_evictions++;
     }
+    ip_rate_t *e = &g_rate[i];
     snprintf(e->ip, sizeof(e->ip), "%s", src_ip);
     e->count = 0;
     e->window_start = now;
     e->last_seen = now;
+    e->hnext = g_bucket[b];
+    g_bucket[b] = i + 1;
+    lru_push_newest(i);
     return e;
 }
 

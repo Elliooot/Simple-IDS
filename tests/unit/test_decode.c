@@ -1,3 +1,4 @@
+#include <arpa/inet.h>
 #include <pcap.h>
 
 #include "pkt.h"
@@ -374,6 +375,27 @@ static void test_decode_null_ipv6_families(void) {
     CHECK_EQ_INT(p.ip_version, 6);
 }
 
+/* decode_addr_str: the hand-written dotted quad matches inet_ntop. */
+static void test_decode_addr_str(void) {
+    static const uint8_t cases[][4] = {
+        {0, 0, 0, 0}, {255, 255, 255, 255}, {9, 10, 99, 100}, {101, 110, 199, 200}, {1, 2, 3, 4},
+    };
+    char got[IP_STR_LEN], want[IP_STR_LEN];
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        uint8_t addr[16] = {0};
+        memcpy(addr, cases[i], 4);
+        decode_addr_str(4, addr, got, sizeof(got));
+        inet_ntop(AF_INET, addr, want, sizeof(want));
+        CHECK_EQ_STR(got, want);
+    }
+    uint8_t v6[16] = {0x20, 0x01, 0x0d, 0xb8, [15] = 1};
+    decode_addr_str(6, v6, got, sizeof(got));
+    CHECK_EQ_STR(got, "2001:db8::1");
+    char tiny[4] = "xyz";
+    decode_addr_str(4, v6, tiny, sizeof(tiny));   /* too small: empty, no overflow */
+    CHECK_EQ_STR(tiny, "");
+}
+
 const test_case_t decode_tests[] = {
     TEST(test_decode_ethernet_ipv4_tcp),
     TEST(test_decode_truncated_capture),
@@ -389,5 +411,6 @@ const test_case_t decode_tests[] = {
     TEST(test_decode_vlan),
     TEST(test_decode_udp),
     TEST(test_decode_null_ipv6_families),
+    TEST(test_decode_addr_str),
     TEST_END
 };

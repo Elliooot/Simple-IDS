@@ -56,9 +56,8 @@ typedef struct {
 } flow_names_t;
 
 static void flow_names(const flow_t *f, flow_names_t *n) {
-    int af = f->ip_version == 6 ? AF_INET6 : AF_INET;
-    inet_ntop(af, f->addr[0], n->ip[0], sizeof(n->ip[0]));
-    inet_ntop(af, f->addr[1], n->ip[1], sizeof(n->ip[1]));
+    decode_addr_str(f->ip_version, f->addr[0], n->ip[0], sizeof(n->ip[0]));
+    decode_addr_str(f->ip_version, f->addr[1], n->ip[1], sizeof(n->ip[1]));
 }
 
 static const char *app_name_of(app_proto_t p) {

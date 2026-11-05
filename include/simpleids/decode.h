@@ -67,4 +67,7 @@ decode_result_t decode_packet(int linktype, const uint8_t *data, size_t caplen,
 
 const char *decode_result_str(decode_result_t r);
 
+/* Text form of a 4- or 16-byte address (outlen >= IP_STR_LEN). */
+void decode_addr_str(uint8_t ip_version, const uint8_t addr[16], char *out, size_t outlen);
+
 #endif
